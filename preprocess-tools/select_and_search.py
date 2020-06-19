@@ -7,6 +7,8 @@ from scipy.io import wavfile
 import copy
 import numpy as np
 import sys
+import math
+import time
 
 
 def plot_spectrogram(wav_file, spectrogram_title, display=True):
@@ -18,7 +20,7 @@ def plot_spectrogram(wav_file, spectrogram_title, display=True):
     :return: a 2d ndarray of float32s which represents the spectrogram
     """
     sample_rate, samples = wavfile.read(wav_file)
-    frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate)
+    frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate, nperseg=1800)
 
     # Only keep frequencies between 100 and 900 Hz
     desired_frequencies = ((frequencies >= 100) & (frequencies <= 900))
@@ -183,8 +185,8 @@ if __name__ == "__main__":
                 arch = DenseArchipelago((point_idx, row_idx))
                 test_spectrogram[row_idx][point_idx] = 0
                 # Allow for a gap between islands in archipelago of size at most 2
-                archipelago_expander(arch, (point_idx, row_idx), test_spectrogram, 2)
-                # Only pick islands with more than 12 pixels
+                archipelago_expander(arch, (point_idx, row_idx), test_spectrogram, 3)
+                # Only pick islands with more than 12 pixel
                 if arch.size() > 12:
                     archipelagos.append(arch)
 
@@ -193,6 +195,11 @@ if __name__ == "__main__":
 
     # Draw in bounding boxes on cleaned up and denoised spectrogram
     for archipelago in archipelagos:
+        # Print the times that the bounding box is bounding
+        print("Sample starting at {} ending at {}".format(
+            time.strftime('%H:%M:%S', time.gmtime(math.floor(times[archipelago.left_bd]))),
+            time.strftime('%H:%M:%S', time.gmtime(math.floor(times[archipelago.right_bd])))))
+
         # draw left and right lines
         for i in range(archipelago.lower_bd, archipelago.upper_bd):
             audio[i][archipelago.left_bd] = audio[i][archipelago.right_bd] = audio.max()
@@ -201,4 +208,4 @@ if __name__ == "__main__":
         for i in range(archipelago.left_bd, archipelago.right_bd):
             audio[archipelago.lower_bd][i] = audio[archipelago.upper_bd][i] = audio.max()
 
-    colormesh_spectrogram(audio_regen, times, frequencies, "Bounding Boxes")
+    colormesh_spectrogram(audio, times, frequencies, "Bounding Boxes")
