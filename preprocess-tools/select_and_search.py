@@ -11,7 +11,7 @@ import sys
 
 def plot_spectrogram(wav_file, spectrogram_title, display=True):
     """
-    Plots a spectrogram of wav_file with title spectrogram_title
+    Plots a of wav_file with title spectrogram_title
     :param wav_file: The .wav file to be plotted
     :param spectrogram_title: The title of the spectrogram to be plotted
     :param display: If True, displays the spectrogram as a matplotlib colormesh. Otherwise, does not display image
@@ -20,17 +20,26 @@ def plot_spectrogram(wav_file, spectrogram_title, display=True):
     sample_rate, samples = wavfile.read(wav_file)
     frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate)
 
+    # Only keep frequencies between 100 and 900 Hz
+    desired_frequencies = ((frequencies >= 100) & (frequencies <= 900))
+    frequencies = frequencies[desired_frequencies]
+    spectrogram = spectrogram[desired_frequencies, :]
+
     if display:
-        plt.pcolormesh(times, frequencies, spectrogram)
-        plt.ylabel('Frequency [Hz]')
-        plt.xlabel('Time [sec]')
-        plt.title(spectrogram_title)
-        plt.show()
+        colormesh_spectrogram(spectrogram, times, frequencies, spectrogram_title)
 
-    return spectrogram
+    return spectrogram, times, frequencies
 
 
-def denoise(image, display=True):
+def colormesh_spectrogram(spectrogram, times, frequencies, title):
+    plt.pcolormesh(times, frequencies, spectrogram)
+    plt.ylabel('Frequency [Hz]')
+    plt.xlabel('Time [sec]')
+    plt.title(title)
+    plt.show()
+
+
+def denoise(image, times, frequencies, display=True):
     """
     (Intended for use on noisy spectrograms)
     Denoise an image by removing all pixels from each row which are less than the (mean + std deviation) of that
@@ -51,9 +60,7 @@ def denoise(image, display=True):
         row[np.invert(dropped_indices)] = 1
 
     if display:
-        plt.pcolormesh(denoised_img)
-        plt.title("{} (Thresholded)".format("test"))
-        plt.show()
+        colormesh_spectrogram(denoised_img, times, frequencies, "Denoised")
 
     return denoised_img
 
@@ -141,7 +148,7 @@ def archipelago_expander(archipelago, focus, cp_spectrogram, cur_gap):
             archipelago_expander(archipelago, potential_neighbor, cp_spectrogram, cur_gap - 1)
 
 
-def regenerate_from_archipelagos(archipelago_list, original_spectrogram, display=True):
+def regenerate_from_archipelagos(archipelago_list, original_spectrogram, times, frequencies, display=True):
     """
     Converts a list of archipelagos back into an image of said archipelagos
     :param archipelago_list: A list of DenseArchipelagos which were pulled out of 'original_spectrogram'
@@ -158,20 +165,16 @@ def regenerate_from_archipelagos(archipelago_list, original_spectrogram, display
             regenerated[land[1]][land[0]] = 1
 
     if display:
-        plt.pcolormesh(regenerated)
-        plt.ylabel('Frequency [Hz]')
-        plt.xlabel('Time (unitless)')
-        plt.title("Frequency (unitless)")
-        plt.show()
+        colormesh_spectrogram(regenerated, times, frequencies, "Archipelago Regeneration")
 
     return regenerated
 
 
 if __name__ == "__main__":
     # Generate plain spectrogram
-    bowhead = plot_spectrogram(sys.argv[1], "Humpback")
+    audio, times, frequencies = plot_spectrogram(sys.argv[1], "Original Spectrogram")
     # Generate denoised spectrogram
-    test_spectrogram = denoise(bowhead)
+    test_spectrogram = denoise(audio, times, frequencies)
     # Find archipelagos in denoised spectrogram
     archipelagos = []
     for row_idx, row in enumerate(test_spectrogram):
@@ -186,21 +189,16 @@ if __name__ == "__main__":
                     archipelagos.append(arch)
 
     # Regenerate and display cleaned up spectrogram from denoised spectrogram
-    bowhead_regen = regenerate_from_archipelagos(archipelagos, bowhead)
+    audio_regen = regenerate_from_archipelagos(archipelagos, audio, times, frequencies)
 
     # Draw in bounding boxes on cleaned up and denoised spectrogram
     for archipelago in archipelagos:
         # draw left and right lines
         for i in range(archipelago.lower_bd, archipelago.upper_bd):
-            bowhead[i][archipelago.left_bd] = bowhead[i][archipelago.right_bd] = bowhead.max()
+            audio[i][archipelago.left_bd] = audio[i][archipelago.right_bd] = audio.max()
 
         # draw upper and lower lines
         for i in range(archipelago.left_bd, archipelago.right_bd):
-            bowhead[archipelago.lower_bd][i] = bowhead[archipelago.upper_bd][i] = bowhead.max()
+            audio[archipelago.lower_bd][i] = audio[archipelago.upper_bd][i] = audio.max()
 
-    plt.pcolormesh(bowhead)
-    plt.ylabel('Pixels')
-    plt.xlabel('Pixels')
-    plt.title("Bounding Boxes")
-    plt.show()
-
+    colormesh_spectrogram(audio_regen, times, frequencies, "Bounding Boxes")
