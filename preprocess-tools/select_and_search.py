@@ -20,7 +20,7 @@ def plot_spectrogram(wav_file, spectrogram_title, display=True):
     :return: a 2d ndarray of float32s which represents the spectrogram
     """
     sample_rate, samples = wavfile.read(wav_file)
-    frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate, nperseg=1800)
+    frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate)
 
     # Only keep frequencies between 100 and 900 Hz
     desired_frequencies = ((frequencies >= 100) & (frequencies <= 900))
@@ -184,7 +184,7 @@ if __name__ == "__main__":
             if point:
                 arch = DenseArchipelago((point_idx, row_idx))
                 test_spectrogram[row_idx][point_idx] = 0
-                # Allow for a gap between islands in archipelago of size at most 2
+                # Allow for a gap between islands in archipelago of size at most 3
                 archipelago_expander(arch, (point_idx, row_idx), test_spectrogram, 3)
                 # Only pick islands with more than 12 pixel
                 if arch.size() > 12:
