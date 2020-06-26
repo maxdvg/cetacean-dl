@@ -1,5 +1,6 @@
 # Max Van Gelder 6/19/2020
-# sys.argv[1] is a .wav file for generating the spectrogram
+# sys.argv[1] is a directory containing any number of .wav files for which
+# spectrograms are to be generated
 
 import matplotlib.pyplot as plt
 from scipy import signal
@@ -9,6 +10,7 @@ import numpy as np
 import sys
 import math
 import time
+from os import listdir
 
 
 def plot_spectrogram(wav_file, spectrogram_title, display=True):
@@ -17,7 +19,10 @@ def plot_spectrogram(wav_file, spectrogram_title, display=True):
     :param wav_file: The .wav file to be plotted
     :param spectrogram_title: The title of the spectrogram to be plotted
     :param display: If True, displays the spectrogram as a matplotlib colormesh. Otherwise, does not display image
-    :return: a 2d ndarray of float32s which represents the spectrogram
+    :return: a 3-tuple which consists of:
+        - a 2d ndarray of float32s which represents the spectrogram
+        - an ndarray of float64s which represents the times of each spectrum
+        - an ndarray of float64s which represents the frequencies in the spectrogram
     """
     sample_rate, samples = wavfile.read(wav_file)
     frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate)
@@ -33,11 +38,15 @@ def plot_spectrogram(wav_file, spectrogram_title, display=True):
     return spectrogram, times, frequencies
 
 
-def colormesh_spectrogram(spectrogram, times, frequencies, title):
+def colormesh_spectrogram(spectrogram, times, frequencies, title, save=False):
     plt.pcolormesh(times, frequencies, spectrogram)
     plt.ylabel('Frequency [Hz]')
     plt.xlabel('Time [sec]')
     plt.title(title)
+
+    if save:
+        plt.savefig("{}.png".format(title.split('.')[0]))
+
     plt.show()
 
 
@@ -68,11 +77,16 @@ def denoise(image, times, frequencies, display=True):
 
 
 class DenseArchipelago:
-    def __init__(self, seed):
-        # Bounding box for the dense archipelago is initialized to only
-        # include the archipelago's seed
-        self.lower_bd = self.upper_bd = seed[1]
-        self.left_bd = self.right_bd = seed[0]
+    def __init__(self, *seed):
+        if seed:
+            # Bounding box for the dense archipelago is initialized to only
+            # include the archipelago's seed if seed was specified on init
+            self.lower_bd = self.upper_bd = seed[0][1]
+            self.left_bd = self.right_bd = seed[0][0]
+        else:
+            # If seed wasn't specified on init, initialize bounding box to none
+            self.lower_bd = self.upper_bd = None
+            self.left_bd = self.right_bd = None
         # List containing all of the points within the archipelago
         self.land = []
 
@@ -86,6 +100,7 @@ class DenseArchipelago:
         """
         if self.lower_bd is None:
             self.left_bd = self.right_bd = location[0]
+            self.lower_bd = self.upper_bd = location[1]
         else:
             self.left_bd = min(self.left_bd, location[0])
             self.lower_bd = min(self.lower_bd, location[1])
@@ -103,6 +118,7 @@ class DenseArchipelago:
         """
         Calculates the proportion of the bounding box which is occupied by
         points in the archipelago
+        :requires: Archipelago must have at least one element in it already
         :return: a float representing the proportion of the bounding box occupied
         by points in the archipelago
         """
@@ -173,39 +189,43 @@ def regenerate_from_archipelagos(archipelago_list, original_spectrogram, times, 
 
 
 if __name__ == "__main__":
-    # Generate plain spectrogram
-    audio, times, frequencies = plot_spectrogram(sys.argv[1], "Original Spectrogram")
-    # Generate denoised spectrogram
-    test_spectrogram = denoise(audio, times, frequencies)
-    # Find archipelagos in denoised spectrogram
-    archipelagos = []
-    for row_idx, row in enumerate(test_spectrogram):
-        for point_idx, point in enumerate(row):
-            if point:
-                arch = DenseArchipelago((point_idx, row_idx))
-                test_spectrogram[row_idx][point_idx] = 0
-                # Allow for a gap between islands in archipelago of size at most 3
-                archipelago_expander(arch, (point_idx, row_idx), test_spectrogram, 3)
-                # Only pick islands with more than 12 pixel
-                if arch.size() > 12:
-                    archipelagos.append(arch)
+    wavs = listdir(sys.argv[1])
+    for wav in wavs:
+        # Generate plain spectrogram
+        audio, times, frequencies = plot_spectrogram(sys.argv[1] + wav, wav)
+        # Generate denoised spectrogram
+        test_spectrogram = denoise(audio, times, frequencies)
+        # Find archipelagos in denoised spectrogram
+        archipelagos = []
+        for row_idx, row in enumerate(test_spectrogram):
+            for point_idx, point in enumerate(row):
+                if point:
+                    arch = DenseArchipelago((point_idx, row_idx))
+                    test_spectrogram[row_idx][point_idx] = 0
+                    # Allow for a gap between islands in archipelago of size at most 3
+                    archipelago_expander(arch, (point_idx, row_idx), test_spectrogram, 3)
+                    # Only pick islands with more than 12 pixel
+                    if arch.size() > 12:
+                        archipelagos.append(arch)
 
-    # Regenerate and display cleaned up spectrogram from denoised spectrogram
-    audio_regen = regenerate_from_archipelagos(archipelagos, audio, times, frequencies)
+        # Regenerate and display cleaned up spectrogram from denoised spectrogram
+        audio_regen = regenerate_from_archipelagos(archipelagos, audio, times, frequencies)
 
-    # Draw in bounding boxes on cleaned up and denoised spectrogram
-    for archipelago in archipelagos:
-        # Print the times that the bounding box is bounding
-        print("Sample starting at {} ending at {}".format(
-            time.strftime('%H:%M:%S', time.gmtime(math.floor(times[archipelago.left_bd]))),
-            time.strftime('%H:%M:%S', time.gmtime(math.floor(times[archipelago.right_bd])))))
+        # Draw in bounding boxes on cleaned up and denoised spectrogram
+        for archipelago in archipelagos:
+            # Print the times that the bounding box is bounding
+            print("Sample starting at {} ending at {}".format(
+                time.strftime('%H:%M:%S', time.gmtime(math.floor(times[archipelago.left_bd]))),
+                time.strftime('%H:%M:%S', time.gmtime(math.floor(times[archipelago.right_bd])))))
 
-        # draw left and right lines
-        for i in range(archipelago.lower_bd, archipelago.upper_bd):
-            audio[i][archipelago.left_bd] = audio[i][archipelago.right_bd] = audio.max()
+            # draw left and right lines
+            for i in range(archipelago.lower_bd, archipelago.upper_bd):
+                audio[i][archipelago.left_bd] = audio[i][archipelago.right_bd] = audio.max()
 
-        # draw upper and lower lines
-        for i in range(archipelago.left_bd, archipelago.right_bd):
-            audio[archipelago.lower_bd][i] = audio[archipelago.upper_bd][i] = audio.max()
+            # draw upper and lower lines
+            for i in range(archipelago.left_bd, archipelago.right_bd):
+                audio[archipelago.lower_bd][i] = audio[archipelago.upper_bd][i] = audio.max()
 
-    colormesh_spectrogram(audio, times, frequencies, "Bounding Boxes")
+        colormesh_spectrogram(audio, times, frequencies, "Bounding Boxes {}".format(wav))
+
+        input("Ready for the next spectrograms?")
