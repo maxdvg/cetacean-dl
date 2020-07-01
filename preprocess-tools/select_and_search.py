@@ -110,7 +110,7 @@ class DenseArchipelago:
 
     def size(self):
         """
-        :return: Number of
+        :return: Number of points contained in the archipelago
         """
         return len(self.land)
 

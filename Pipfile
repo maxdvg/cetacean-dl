@@ -10,6 +10,7 @@ jupyter = "*"
 matplotlib = "*"
 scipy = "*"
 opencv-python = "*"
+scikit-learn = "*"
 
 [requires]
 python_version = "3.8"
