@@ -99,8 +99,8 @@ class Recording:
         for i in range(math.floor(total_length / chunk_len)):
             # Downsamples to 4096 samples/second (seems to be a good rate)
             self.chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len
-                                                 :int(sample_rate/4096)],
-                                         4096))
+                                                 :int(sample_rate/2048)],
+                                         2048))
 
     def restrict_chunk_frequencies(self, freq_lo, freq_hi):
         """
