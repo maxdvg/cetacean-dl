@@ -5,8 +5,11 @@
 # whale songs which we want to target
 
 # sys.argv[1] is a directory which contains (exclusively) .wav files of whale songs
+# sys.argv[2] is a .json file for storing SongRecords
 
 import copy
+from collections import namedtuple
+import json
 import math
 import numpy as np
 from os import listdir
@@ -16,6 +19,19 @@ from scipy.io import wavfile
 from select_and_search import DenseArchipelago, archipelago_expander, regenerate_from_archipelagos, colormesh_spectrogram
 from sklearn.cluster import KMeans
 import sys
+
+# Default values for processing recordings
+Config = namedtuple('Config', ['chunk_len', 'lo_freq', 'hi_freq', 'min_land_mass',
+                               'max_gap', 'threshold_cutoff', 'recording_rate'])
+cfg_default = Config(
+    chunk_len=5,
+    lo_freq=200,
+    hi_freq=950,
+    min_land_mass=12,
+    max_gap=3,
+    threshold_cutoff=.85,
+    recording_rate=2048
+)
 
 
 class AlreadyInitializedError(Exception):
@@ -50,7 +66,7 @@ class SongChunk:
         """
         Restrict the frequencies of the spectrogram to be between 'freq_lo' and 'freq_hi'
         :param freq_lo: The lowest frequency we want maintained in the spectrogram
-        :param freq_hi: The highest frequency we weant maintained in the spectrogram
+        :param freq_hi: The highest frequency we want maintained in the spectrogram
         :raises AlreadyInitializedError: if user attempts to restrict frequencies to a superset of the current
         current frequencies
         """
@@ -58,14 +74,14 @@ class SongChunk:
             if self._lo_freq > freq_lo:
                 raise AlreadyInitializedError(self._lo_freq, freq_lo, "Invalid attempt to restrict low frequencies")
             elif self._hi_freq < freq_hi:
-                raise AlreadyInitializedError(self._hi_freq, freq_hi, "Invlaid attempt to restrict high frequencies")
+                raise AlreadyInitializedError(self._hi_freq, freq_hi, "Invalid attempt to restrict high frequencies")
 
         # Only keep frequencies between freq_lo and freq_hi Hz
         desired_frequencies = ((self.frequencies >= freq_lo) & (self.frequencies <= freq_hi))
         self.frequencies = self.frequencies[desired_frequencies]
         self.spectrogram = self.spectrogram[desired_frequencies, :]
 
-    def populate_archipelagos(self, min_land_mass=12, max_gap=3):
+    def populate_archipelagos(self, min_land_mass=cfg_default.min_land_mass, max_gap=cfg_default.max_gap):
         """
         Finds all of the archipelagos of size > 'min_land_mass' and with gaps of size at most 'max_gap' contained
         in the song chunk
@@ -96,7 +112,7 @@ class SongChunk:
         self._min_land_mass = min_land_mass
         self._max_gap = max_gap
 
-    def threshold(self, cutoff_fraction=0.9):
+    def threshold(self, cutoff_fraction=cfg_default.threshold_cutoff):
         """
         Zeros out every element in the chunks spectrogram which is not in the top (1 - cutoff_fraction) fraction
         of the spectrogram's values
@@ -166,7 +182,7 @@ class RecordingIterator:
 
 
 class Recording:
-    def __init__(self, song_wav, chunk_len=20):
+    def __init__(self, song_wav, chunk_len=cfg_default.chunk_len):
         """
         Initializes Recording object by reading in the .wav file 'song_wav' and breaking it into
         several SongChunks with recording length of 'chunk_len'
@@ -182,10 +198,10 @@ class Recording:
         self.chunks = []
         total_length = float(samples.shape[0] / sample_rate)
         for i in range(math.floor(total_length / chunk_len)):
-            # Downsamples to 4096 samples/second (seems to be a good rate)
+            # Downsamples to cfg_default.recording_rate
             self.chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len
-                                                 :int(sample_rate/2048)],
-                                         2048))
+                                                 :int(sample_rate/cfg_default.recording_rate)],
+                                         cfg_default.recording_rate))
 
     def restrict_chunk_frequencies(self, freq_lo, freq_hi):
         """
@@ -209,7 +225,7 @@ class Recording:
         for chunk in self.chunks:
             chunk.threshold(cutoff_fraction)
 
-    def locate_archipelagos(self, min_land_mass=12, max_gap=3):
+    def locate_archipelagos(self, min_land_mass=cfg_default.min_land_mass, max_gap=cfg_default.max_gap):
         """
         Locates all of the archipelagos in each of the chunks in self.chunks
         :param min_land_mass: the minimum land mass for an archipelago
@@ -233,7 +249,6 @@ if __name__ == "__main__":
     recordings = []
     num_chunks = 0
 
-
     # for wav_file in wavs:
 
     wavs_read = 0
@@ -242,11 +257,11 @@ if __name__ == "__main__":
         # Load in all of the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
         # Restrict the frequencies of the song between 200 and 900 Hz
-        recording.restrict_chunk_frequencies(200, 900)
+        recording.restrict_chunk_frequencies(cfg_default.lo_freq, cfg_default.hi_freq)
         # Threshold at 70%
-        recording.threshold_chunks(.9)
+        recording.threshold_chunks(cfg_default.threshold_cutoff)
         # Pull out the features (# of archipelagos, distance between archipelagos, etc...)
-        recording.locate_archipelagos(max_gap=2)
+        recording.locate_archipelagos()
 
         recordings.append(recording)
         num_chunks += len(recording.chunks)
