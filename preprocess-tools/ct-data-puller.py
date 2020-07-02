@@ -1,8 +1,7 @@
 # Max Van Gelder
 # 6/29/20
 
-# Uses classification trees to pull data which best represents the Humpback
-# whale songs which we want to target
+# Organizes and classifies good humpback data
 
 # sys.argv[1] is a directory which contains (exclusively) .wav files of whale songs
 # sys.argv[2] is a .json file for storing SongRecords
@@ -10,6 +9,7 @@
 import copy
 from collections import namedtuple
 import json
+from json import JSONEncoder
 import math
 import numpy as np
 from os import listdir
@@ -80,6 +80,9 @@ class SongChunk:
         desired_frequencies = ((self.frequencies >= freq_lo) & (self.frequencies <= freq_hi))
         self.frequencies = self.frequencies[desired_frequencies]
         self.spectrogram = self.spectrogram[desired_frequencies, :]
+
+        self._hi_freq = freq_hi
+        self._lo_freq = freq_lo
 
     def populate_archipelagos(self, min_land_mass=cfg_default.min_land_mass, max_gap=cfg_default.max_gap):
         """
@@ -167,6 +170,18 @@ class SongChunk:
         return None
 
 
+class SongChunkEncoder(JSONEncoder):
+    def default(self, o):
+        try:
+            retval = o.archipelagos()
+        except TypeError:
+            pass
+        else:
+            return retval
+        # Let the base class default method raise the TypeError
+        return json.JSONEncoder.default(self, o)
+
+
 class RecordingIterator:
     """ Iterator """
     def __init__(self, record):
@@ -189,7 +204,7 @@ class Recording:
         :param song_wav: wav file containing the whale song
         :param chunk_len: The length, in seconds, that each 'chunk' of the recording should be
         """
-        #TODO: Decimate .wav for faster processing
+        # TODO: Decimate .wav for faster processing
 
         # Read in the song_wav
         sample_rate, samples = wavfile.read(song_wav)
@@ -199,8 +214,8 @@ class Recording:
         total_length = float(samples.shape[0] / sample_rate)
         for i in range(math.floor(total_length / chunk_len)):
             # Downsamples to cfg_default.recording_rate
-            self.chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len
-                                                 :int(sample_rate/cfg_default.recording_rate)],
+            self.chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
+                                                 int(sample_rate/cfg_default.recording_rate)],
                                          cfg_default.recording_rate))
 
     def restrict_chunk_frequencies(self, freq_lo, freq_hi):
@@ -244,6 +259,18 @@ class Recording:
         return RecordingIterator(self)
 
 
+class RecordingEncoder(JSONEncoder):
+    def default(self, o):
+        try:
+            retval = o.chunks
+        except TypeError:
+            pass
+        else:
+            return retval
+        # Let the base class default method raise the TypeError
+        return json.JSONEncoder.default(self, o)
+
+
 if __name__ == "__main__":
     wavs = listdir(sys.argv[1])
     recordings = []
@@ -252,13 +279,13 @@ if __name__ == "__main__":
     # for wav_file in wavs:
 
     wavs_read = 0
-    while wavs and wavs_read < 5:
+    while wavs and wavs_read < 2:
         wav_file = wavs[wavs_read]
         # Load in all of the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
-        # Restrict the frequencies of the song between 200 and 900 Hz
+        # Restrict the frequencies of the song between lo_freq and hi_freq Hz
         recording.restrict_chunk_frequencies(cfg_default.lo_freq, cfg_default.hi_freq)
-        # Threshold at 70%
+        # Threshold at threshold_cutoff
         recording.threshold_chunks(cfg_default.threshold_cutoff)
         # Pull out the features (# of archipelagos, distance between archipelagos, etc...)
         recording.locate_archipelagos()
@@ -267,20 +294,14 @@ if __name__ == "__main__":
         num_chunks += len(recording.chunks)
         wavs_read += 1
 
-    # good_data = np.zeros(num_chunks, dtype=bool)
-
     chunk_data = []
     for recording in recordings:
-        for chunk in recording:
-            chunk_data.append([chunk.num_archipelagos(), chunk.avg_archipelago_size()])
+        for rec_chunk in recording:
+            chunk_data.append([rec_chunk.num_archipelagos(), rec_chunk.avg_archipelago_size()])
 
     # K-Means
     kmeans = KMeans(n_clusters=2, random_state=0).fit(chunk_data)
 
-    i = 0
-    for recording in recordings:
-        for chunk in recording:
-            chunk.display()
-            print(kmeans.labels_[i])
-            i += 1
-            input("Next?")
+    with open(sys.argv[2], 'w') as f:
+        for recording in recordings:
+            print(RecordingEncoder().encode(recording))

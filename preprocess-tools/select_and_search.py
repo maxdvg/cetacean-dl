@@ -2,6 +2,7 @@
 # sys.argv[1] is a directory containing any number of .wav files for which
 # spectrograms are to be generated
 
+from json import JSONEncoder
 import matplotlib.pyplot as plt
 from scipy import signal
 from scipy.io import wavfile
@@ -124,6 +125,19 @@ class DenseArchipelago:
         """
         volume = (self.right_bd - self.left_bd) * (self.upper_bd - self.lower_bd)
         return self.size() / float(volume)
+
+
+class DenseArchipelagoEncoder(JSONEncoder):
+    """ JSON encoding for DenseArchipelagos """
+    def default(self, o):
+        try:
+            retval = o.__dict__()
+        except TypeError:
+            pass
+        else:
+            return retval
+        # Let the base class default method raise the TypeError
+        return JSONEncoder.default(self, o)
 
 
 def archipelago_expander(archipelago, focus, cp_spectrogram, cur_gap):
