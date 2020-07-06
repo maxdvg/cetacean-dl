@@ -12,6 +12,7 @@ scipy = "*"
 opencv-python = "*"
 scikit-learn = "*"
 jsons = "*"
+jsonpickle = "*"
 
 [requires]
 python_version = "3.8"

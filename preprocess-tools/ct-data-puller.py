@@ -8,15 +8,18 @@
 
 import copy
 from collections import namedtuple
+from dataclasses import dataclass
 import json
 from json import JSONEncoder
+import jsonpickle
 import math
 import numpy as np
 from os import listdir
 from os.path import join as pjoin
 from scipy import signal
 from scipy.io import wavfile
-from select_and_search import DenseArchipelago, archipelago_expander, regenerate_from_archipelagos, colormesh_spectrogram
+from select_and_search import DenseArchipelago, DenseArchipelagoEncoder, archipelago_expander,\
+    regenerate_from_archipelagos, colormesh_spectrogram
 from sklearn.cluster import KMeans
 import sys
 
@@ -45,6 +48,18 @@ class AlreadyInitializedError(Exception):
 
     def __str__(self):
         return "{}: Attempted to reset value {} to {}".format(self.message, self.value, self.attempted_value)
+
+
+@dataclass
+class RecordingInformation:
+    file_name: str
+    ACS2_HD_loc: str
+    secs_per_chunk: np.int8
+    num_chunks: np.int8
+    low_freq: int
+    hi_freq: int
+    threshold: float
+    chunks: list
 
 
 class SongChunk:
@@ -173,7 +188,7 @@ class SongChunk:
 class SongChunkEncoder(JSONEncoder):
     def default(self, o):
         try:
-            retval = o.archipelagos()
+            retval = [DenseArchipelagoEncoder().encode(apg) for apg in o.archipelagos]
         except TypeError:
             pass
         else:
@@ -189,8 +204,8 @@ class RecordingIterator:
         self._idx = 0
 
     def __next__(self):
-        if self._idx < len(self._recording.chunks):
-            result_chunk = self._recording.chunks[self._idx]
+        if self._idx < len(self._recording.song_chunks):
+            result_chunk = self._recording.song_chunks[self._idx]
             self._idx += 1
             return result_chunk
         raise StopIteration
@@ -210,11 +225,11 @@ class Recording:
         sample_rate, samples = wavfile.read(song_wav)
 
         # Populate array of SongChunk objects which as a whole represent the entire song_wav recording
-        self.chunks = []
+        self.song_chunks = []
         total_length = float(samples.shape[0] / sample_rate)
         for i in range(math.floor(total_length / chunk_len)):
             # Downsamples to cfg_default.recording_rate
-            self.chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
+            self.song_chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
                                                  int(sample_rate/cfg_default.recording_rate)],
                                          cfg_default.recording_rate))
 
@@ -226,7 +241,7 @@ class Recording:
         :side effects: Deletes all data < freq_lo and > freq_hi from every chunk in self.chunks
         :return: None
         """
-        for chunk in self.chunks:
+        for chunk in self.song_chunks:
             chunk.restrict_frequencies(freq_lo, freq_hi)
 
     def threshold_chunks(self, cutoff_fraction):
@@ -237,7 +252,7 @@ class Recording:
         lowest 80% of every chunk's spectrogram
         :side effects: Every chunk's spectrogram get's the bottom cutoff_fraction zeroed out
         """
-        for chunk in self.chunks:
+        for chunk in self.song_chunks:
             chunk.threshold(cutoff_fraction)
 
     def locate_archipelagos(self, min_land_mass=cfg_default.min_land_mass, max_gap=cfg_default.max_gap):
@@ -248,11 +263,11 @@ class Recording:
         :side effects: Every chunk gets its archipelagos populated
         :return: None
         """
-        for chunk in self.chunks:
+        for chunk in self.song_chunks:
             chunk.populate_archipelagos(min_land_mass, max_gap)
 
     def display_spectrograms(self):
-        for chunk in self.chunks:
+        for chunk in self.song_chunks:
             chunk.display()
 
     def __iter__(self):
@@ -262,7 +277,7 @@ class Recording:
 class RecordingEncoder(JSONEncoder):
     def default(self, o):
         try:
-            retval = o.chunks
+            retval = [SongChunkEncoder().encode(sc) for sc in o.song_chunks]
         except TypeError:
             pass
         else:
@@ -291,7 +306,7 @@ if __name__ == "__main__":
         recording.locate_archipelagos()
 
         recordings.append(recording)
-        num_chunks += len(recording.chunks)
+        num_chunks += len(recording.song_chunks)
         wavs_read += 1
 
     chunk_data = []
