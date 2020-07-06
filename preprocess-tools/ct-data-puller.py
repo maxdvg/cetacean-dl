@@ -9,16 +9,15 @@
 import copy
 from collections import namedtuple
 from dataclasses import dataclass
-import json
-from json import JSONEncoder
-import jsonpickle
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 from os import listdir
 from os.path import join as pjoin
+import pickle
 from scipy import signal
 from scipy.io import wavfile
-from select_and_search import DenseArchipelago, DenseArchipelagoEncoder, archipelago_expander,\
+from select_and_search import DenseArchipelago, archipelago_expander,\
     regenerate_from_archipelagos, colormesh_spectrogram
 from sklearn.cluster import KMeans
 import sys
@@ -48,18 +47,6 @@ class AlreadyInitializedError(Exception):
 
     def __str__(self):
         return "{}: Attempted to reset value {} to {}".format(self.message, self.value, self.attempted_value)
-
-
-@dataclass
-class RecordingInformation:
-    file_name: str
-    ACS2_HD_loc: str
-    secs_per_chunk: np.int8
-    num_chunks: np.int8
-    low_freq: int
-    hi_freq: int
-    threshold: float
-    chunks: list
 
 
 class SongChunk:
@@ -185,18 +172,6 @@ class SongChunk:
         return None
 
 
-class SongChunkEncoder(JSONEncoder):
-    def default(self, o):
-        try:
-            retval = [DenseArchipelagoEncoder().encode(apg) for apg in o.archipelagos]
-        except TypeError:
-            pass
-        else:
-            return retval
-        # Let the base class default method raise the TypeError
-        return json.JSONEncoder.default(self, o)
-
-
 class RecordingIterator:
     """ Iterator """
     def __init__(self, record):
@@ -274,18 +249,6 @@ class Recording:
         return RecordingIterator(self)
 
 
-class RecordingEncoder(JSONEncoder):
-    def default(self, o):
-        try:
-            retval = [SongChunkEncoder().encode(sc) for sc in o.song_chunks]
-        except TypeError:
-            pass
-        else:
-            return retval
-        # Let the base class default method raise the TypeError
-        return json.JSONEncoder.default(self, o)
-
-
 if __name__ == "__main__":
     wavs = listdir(sys.argv[1])
     recordings = []
@@ -294,7 +257,7 @@ if __name__ == "__main__":
     # for wav_file in wavs:
 
     wavs_read = 0
-    while wavs and wavs_read < 2:
+    while wavs and wavs_read < 7:
         wav_file = wavs[wavs_read]
         # Load in all of the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
@@ -312,11 +275,21 @@ if __name__ == "__main__":
     chunk_data = []
     for recording in recordings:
         for rec_chunk in recording:
-            chunk_data.append([rec_chunk.num_archipelagos(), rec_chunk.avg_archipelago_size()])
+            # Throw out outliers and totally noisy samples
+            if rec_chunk.avg_archipelago_size() < 80 and rec_chunk.num_archipelagos() > 0:
+                chunk_data.append([rec_chunk.num_archipelagos(), rec_chunk.avg_archipelago_size()])
 
     # K-Means
-    kmeans = KMeans(n_clusters=2, random_state=0).fit(chunk_data)
+    num_clusters = 4
+    kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(chunk_data)
 
-    with open(sys.argv[2], 'w') as f:
+    for i in range(num_clusters):
+        for label_idx, label in enumerate(kmeans.labels_):
+            if label == i:
+                plt.scatter(chunk_data[label_idx][0], chunk_data[label_idx][1], color='C{}'.format(i))
+
+    plt.show()
+
+    with open(sys.argv[2], 'wb') as f:
         for recording in recordings:
-            print(RecordingEncoder().encode(recording))
+            pickle.dump(recording, f)

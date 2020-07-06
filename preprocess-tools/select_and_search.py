@@ -127,19 +127,6 @@ class DenseArchipelago:
         return self.size() / float(volume)
 
 
-class DenseArchipelagoEncoder(JSONEncoder):
-    """ JSON encoding for DenseArchipelagos """
-    def default(self, o):
-        try:
-            retval = o.__dict__()
-        except TypeError:
-            pass
-        else:
-            return retval
-        # Let the base class default method raise the TypeError
-        return JSONEncoder.default(self, o)
-
-
 def archipelago_expander(archipelago, focus, cp_spectrogram, cur_gap):
     """
     :side_effects cp_spectrogram: DESTROYS cp_spectrogram during the search process
