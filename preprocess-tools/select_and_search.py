@@ -125,6 +125,17 @@ class DenseArchipelago:
         volume = (self.right_bd - self.left_bd) * (self.upper_bd - self.lower_bd)
         return self.size() / float(volume)
 
+    def insert_to_database(self, c, song_chunk_id, ):
+        c.execute("INSERT INTO archs (ParentChunk, LeftBd, RightBd, UpBd, LowBd) VALUES"
+                  "('{}', '{}', '{}', '{}', '{}')".format(song_chunk_id, self.left_bd, self.right_bd,
+                                                    self.upper_bd, self.lower_bd))
+        c.execute("SELECT last_insert_rowid()")
+        arch_id = c.fetchone()[0]
+        for land_piece in self.land:
+            c.execute("INSERT INTO land (ParentArchipelago, X, Y) VALUES ('{}', '{}', '{}')".format(arch_id,
+                                                                                                    land_piece[0],
+                                                                                                    land_piece[1]))
+
 
 def archipelago_expander(archipelago, focus, cp_spectrogram, cur_gap):
     """

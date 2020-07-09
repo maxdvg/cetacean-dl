@@ -196,6 +196,28 @@ class SongChunk:
                 return total_density / self.num_archipelagos()
         return None
 
+    def insert_to_database(self, c, fid):
+        """
+        Insert the SongChunk into the database. This insertion involves a) inserting metadata like num_archipelagos
+        and b) inserting all of the archipelagos in the SongChunk into the database as well. See the EXPLANATORY_FILE
+        for more details on the database
+        :param c: Cursor for SQLite3 database
+        :param fid: The FileID field in the database of the Recording which is the parent of this SongChunk
+        :return:
+        """
+        # Insert the SongChunk into the chunks table
+        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize) "
+                  "VALUES ('{}', '{}', '{}', '{}')".format(self.specname,
+                                                           fid,
+                                                           self.num_archipelagos(),
+                                                           self.avg_archipelago_size()))
+        # Get the RowID of the SongChunk we just inserted
+        c.execute("SELECT last_insert_rowid()")
+        chunk_id = c.fetchone()[0]
+        # Insert all of the archipelagos in the SongChunk into the Archs table
+        for archipelago in self.archipelagos:
+            archipelago.insert_to_database(c, chunk_id)
+
 
 class RecordingIterator:
     """ Iterator """
@@ -303,11 +325,8 @@ class Recording:
         fid = c.fetchone()[0]
         # Insert each of the song chunks into the chunks table
         for chunk in self.song_chunks:
-            c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize) "
-                      "VALUES ('{}', '{}', '{}', '{}')".format(chunk.specname,
-                                                               fid,
-                                                               chunk.num_archipelagos(),
-                                                               chunk.avg_archipelago_size()))
+            chunk.insert_to_database(c, fid)
+
         return True
 
     def __iter__(self):
@@ -337,6 +356,23 @@ def db_check(c):
                   " ACPId, FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
+    # Check that ArchipelagoTable exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archs'")
+    if c.fetchone() is None:
+        # Create ArchipelagoTable
+        c.execute("CREATE TABLE archs (ArchID INTEGER PRIMARY KEY, "
+                  "ParentChunk INTEGER, LeftBd INTEGER, RightBd INTEGER, UpBd INTEGER,"
+                  "LowBd INTEGER, FOREIGN KEY(ParentChunk) REFERENCES chunks(RecordID))")
+        db_exists = False
+
+    # Check that LandTable exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='land'")
+    if c.fetchone() is None:
+        # Create ArchipelagoTable
+        c.execute("CREATE TABLE land (ParentArchipelago INTEGER, X INTEGER, Y INTEGER,"
+                  " FOREIGN KEY(ParentArchipelago) REFERENCES archs(ArchID))")
+        db_exists = False
+
     return db_exists
 
 
@@ -355,7 +391,7 @@ if __name__ == "__main__":
     # for wav_file in wavs:
 
     wavs_read = 0
-    while wavs and wavs_read < 7:
+    while wavs and wavs_read < 1:
         wav_file = wavs[wavs_read]
         # Load in the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
