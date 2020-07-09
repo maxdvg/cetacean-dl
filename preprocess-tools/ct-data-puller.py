@@ -1,7 +1,7 @@
 # Max Van Gelder
 # 6/29/20
 
-# Organizes and classifies good humpback data
+# Loads whale song data into database
 
 # sys.argv[1] is a directory which contains (exclusively) .wav files of whale songs
 # sys.argv[2] is a .db SQLite file which contains the database of information
@@ -19,7 +19,6 @@ from scipy import signal
 from scipy.io import wavfile
 from select_and_search import DenseArchipelago, archipelago_expander,\
     regenerate_from_archipelagos, colormesh_spectrogram
-from sklearn.cluster import KMeans
 import sqlite3
 import sys
 
@@ -284,10 +283,18 @@ class Recording:
 
     def insert_to_database(self, c):
         """
-
-        :param c:
-        :return:
+        Insert the Recording and all of its SongChunks into the database if there is not already a recording
+        in the database which was generated from the same song_wav
+        :param c: The database cursor
+        :return: False if an Recording which has the same song_wav is already in the database, True if there wasn't
+        already a Recording with the song_wav in the database and so this Recording was added to the database
         """
+        # Check if a recording with the same file path already exists in the database
+        c.execute("SELECT * FROM recordings WHERE Path='{}'".format(self.song_wav))
+        if c.fetchone() is not None:
+            print("{} already in database".format(self.song_wav))
+            return False
+
         # Insert the overall recordings object into recordings table first
         c.execute("INSERT INTO recordings (Path) VALUES ('{}')".format(self.song_wav))
 
@@ -296,10 +303,12 @@ class Recording:
         fid = c.fetchone()[0]
         # Insert each of the song chunks into the chunks table
         for chunk in self.song_chunks:
-            c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize) VALUES ('{}', '{}', '{}', '{}')".format(chunk.specname,
-                                                                 fid,
-                                                                 chunk.num_archipelagos(),
-                                                                 chunk.avg_archipelago_size()))
+            c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize) "
+                      "VALUES ('{}', '{}', '{}', '{}')".format(chunk.specname,
+                                                               fid,
+                                                               chunk.num_archipelagos(),
+                                                               chunk.avg_archipelago_size()))
+        return True
 
     def __iter__(self):
         return RecordingIterator(self)
@@ -324,8 +333,8 @@ def db_check(c):
     if c.fetchone() is None:
         # Create RecordingTable
         c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
-                  "ParentRecording INTEGER, NumACP, AvgACPSize, ACPId, FOREIGN KEY(ParentRecording)"
-                  " REFERENCES recordings(FileID))")
+                  "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Classification INTEGER,"
+                  " ACPId, FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
     return db_exists
@@ -348,38 +357,18 @@ if __name__ == "__main__":
     wavs_read = 0
     while wavs and wavs_read < 7:
         wav_file = wavs[wavs_read]
-        # Load in all of the song
+        # Load in the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
         # Do all of the preprocessing and feature extraction
         recording.standard_process()
         # Save the information to the database
         recording.insert_to_database(c)
         conn.commit()
+        print("Added new record to database")
 
         recordings.append(recording)
         num_chunks += len(recording.song_chunks)
         wavs_read += 1
-
-    chunk_data = []
-    for recording in recordings:
-        for rec_chunk in recording:
-            # Throw out outliers and totally noisy samples
-            if rec_chunk.avg_archipelago_size() < 80 and rec_chunk.num_archipelagos() > 0:
-                chunk_data.append([rec_chunk.num_archipelagos(), rec_chunk.avg_archipelago_size(),
-                                   rec_chunk.avg_archipelago_density()])
-
-    # K-Means
-    num_clusters = 2
-    kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(chunk_data)
-
-    for i in range(num_clusters):
-        for label_idx, label in enumerate(kmeans.labels_):
-            if label == i:
-                plt.scatter(chunk_data[label_idx][0], chunk_data[label_idx][1], color='C{}'.format(i))
-
-    plt.xlabel("Number of archipelagos")
-    plt.ylabel("Average archipelago size")
-    plt.show()
 
     # Close connection with the database
     conn.close()
