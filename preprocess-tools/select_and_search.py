@@ -2,7 +2,6 @@
 # sys.argv[1] is a directory containing any number of .wav files for which
 # spectrograms are to be generated
 
-from json import JSONEncoder
 import matplotlib.pyplot as plt
 from scipy import signal
 from scipy.io import wavfile

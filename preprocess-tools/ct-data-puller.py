@@ -4,35 +4,39 @@
 # Organizes and classifies good humpback data
 
 # sys.argv[1] is a directory which contains (exclusively) .wav files of whale songs
-# sys.argv[2] is a .json file for storing SongRecords
+# sys.argv[2] is a .db SQLite file which contains the database of information
+# sys.argv[3] is the path where the spectrograms which are generated should be saved
 
 import copy
 from collections import namedtuple
-from dataclasses import dataclass
 import math
 import matplotlib.pyplot as plt
 import numpy as np
 from os import listdir
 from os.path import join as pjoin
-import pickle
+from os.path import basename, dirname
 from scipy import signal
 from scipy.io import wavfile
 from select_and_search import DenseArchipelago, archipelago_expander,\
     regenerate_from_archipelagos, colormesh_spectrogram
 from sklearn.cluster import KMeans
+import sqlite3
 import sys
 
 # Default values for processing recordings
 Config = namedtuple('Config', ['chunk_len', 'lo_freq', 'hi_freq', 'min_land_mass',
-                               'max_gap', 'threshold_cutoff', 'recording_rate'])
+                               'max_gap', 'threshold_cutoff', 'recording_rate',
+                               'save_format', 'save_loc'])
 cfg_default = Config(
-    chunk_len=5,
+    chunk_len=20,
     lo_freq=200,
     hi_freq=950,
     min_land_mass=12,
     max_gap=3,
     threshold_cutoff=.85,
-    recording_rate=2048
+    recording_rate=2048,
+    save_format=".png",
+    save_loc=sys.argv[3]
 )
 
 
@@ -50,12 +54,17 @@ class AlreadyInitializedError(Exception):
 
 
 class SongChunk:
-    def __init__(self, samples, sample_rate):
+    def __init__(self, samples, sample_rate, chunk_pos, parent_path):
         """
         :param samples: The second parameter returned by scipy.wavfile.read() on a wav file
         :param sample_rate: The first parameter returned by scipy.wavfile.read() on a wav file
+        :param chunk_pos: The position of the chunk within the greater recording
+        :param parent_path: The full path of the greater recording which the songchunk is a subsection of
         """
         self.frequencies, self.times, self.spectrogram = signal.spectrogram(samples, sample_rate)
+        self.specname = "{}-{}{}".format(pjoin(dirname(cfg_default.save_loc), basename(parent_path).split('.')[0]),
+                                          chunk_pos,
+                                          cfg_default.save_format)
         self.archipelagos = []
         self._archipelagos_initialized = False
         self._min_land_mass = None
@@ -137,13 +146,14 @@ class SongChunk:
         self.spectrogram = self.spectrogram * (self.spectrogram >= cutoff)
         self._threshold_cutoff = cutoff_fraction
 
-    def display(self):
+    def save_chunk(self):
         """
-        Display the spectrogram which corresponds to the SongChunk, and the archipelagos if they have been populated
+        Save the spectrogram which corresponds to the SongChunk
         """
-        colormesh_spectrogram(self.spectrogram, self.times, self.frequencies, "")
-        if self._archipelagos_initialized:
-            regenerate_from_archipelagos(self.archipelagos, self.spectrogram, self.times, self.frequencies)
+        # Save spectrogram image without axes or any surrounding whitespace
+        plt.pcolormesh(self.times, self.frequencies, self.spectrogram, shading='gouraud')
+        plt.axis("off")
+        plt.savefig(self.specname, bbox_inches="tight")
 
     def num_archipelagos(self):
         """
@@ -171,6 +181,22 @@ class SongChunk:
                 return tot_land_mass / self.num_archipelagos()
         return None
 
+    def avg_archipelago_density(self):
+        """
+        :return: The average density of the archipelagos in the sound chunk, i.e. the ratio
+        of the number of pixels in the archipelago to the number of pixels in the bounding rectangle
+        of the archipelago
+        """
+        if self._archipelagos_initialized:
+            if self.num_archipelagos() == 0:
+                return 0
+            else:
+                total_density = 0
+                for archipelago in self.archipelagos:
+                    total_density += archipelago.density()
+                return total_density / self.num_archipelagos()
+        return None
+
 
 class RecordingIterator:
     """ Iterator """
@@ -195,7 +221,8 @@ class Recording:
         :param chunk_len: The length, in seconds, that each 'chunk' of the recording should be
         """
         # TODO: Decimate .wav for faster processing
-
+        self.song_wav = song_wav
+        self.chunk_len = chunk_len
         # Read in the song_wav
         sample_rate, samples = wavfile.read(song_wav)
 
@@ -206,7 +233,7 @@ class Recording:
             # Downsamples to cfg_default.recording_rate
             self.song_chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
                                                  int(sample_rate/cfg_default.recording_rate)],
-                                         cfg_default.recording_rate))
+                                         cfg_default.recording_rate, i, song_wav))
 
     def restrict_chunk_frequencies(self, freq_lo, freq_hi):
         """
@@ -241,15 +268,77 @@ class Recording:
         for chunk in self.song_chunks:
             chunk.populate_archipelagos(min_land_mass, max_gap)
 
-    def display_spectrograms(self):
+    def save_spectrograms(self):
         for chunk in self.song_chunks:
-            chunk.display()
+            chunk.save_chunk()
+
+    def standard_process(self):
+        # Restrict the frequencies of the song between lo_freq and hi_freq Hz
+        self.restrict_chunk_frequencies(cfg_default.lo_freq, cfg_default.hi_freq)
+        # Threshold at threshold_cutoff
+        self.threshold_chunks(cfg_default.threshold_cutoff)
+        # Pull out the features (# of archipelagos, distance between archipelagos, etc...)
+        self.locate_archipelagos()
+        # Save the spectrogram images
+        self.save_spectrograms()
+
+    def insert_to_database(self, c):
+        """
+
+        :param c:
+        :return:
+        """
+        # Insert the overall recordings object into recordings table first
+        c.execute("INSERT INTO recordings (Path) VALUES ('{}')".format(self.song_wav))
+
+        # Get the FileID of the recording in the recordings table
+        c.execute("SELECT FileID FROM recordings WHERE Path='{}'".format(self.song_wav))
+        fid = c.fetchone()[0]
+        # Insert each of the song chunks into the chunks table
+        for chunk in self.song_chunks:
+            c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize) VALUES ('{}', '{}', '{}', '{}')".format(chunk.specname,
+                                                                 fid,
+                                                                 chunk.num_archipelagos(),
+                                                                 chunk.avg_archipelago_size()))
 
     def __iter__(self):
         return RecordingIterator(self)
 
 
+def db_check(c):
+    """
+    Verifies that all of the expected tables are in the database that cursor 'c' points to
+    :param c: A SQLite3 cursor object pointing to a database
+    :return: True if all of the tables already existed in the database, false otherwise
+    """
+    db_exists = True
+    # Check that the FileTable exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='recordings'")
+    if c.fetchone() is None:
+        # Create FileTable table, it didn't exist before
+        c.execute("CREATE TABLE recordings (FileID INTEGER PRIMARY KEY, Path TEXT NOT NULL)")
+        db_exists = False
+
+    # Check that RecordingTable exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
+    if c.fetchone() is None:
+        # Create RecordingTable
+        c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
+                  "ParentRecording INTEGER, NumACP, AvgACPSize, ACPId, FOREIGN KEY(ParentRecording)"
+                  " REFERENCES recordings(FileID))")
+        db_exists = False
+
+    return db_exists
+
+
 if __name__ == "__main__":
+    # Get handle for working with database
+    conn = sqlite3.connect(sys.argv[2])
+    c = conn.cursor()
+    if not db_check(c):
+        print("{} did not contain all of the expected database tables when examined".format(sys.argv[2]))
+    conn.commit()
+
     wavs = listdir(sys.argv[1])
     recordings = []
     num_chunks = 0
@@ -261,12 +350,11 @@ if __name__ == "__main__":
         wav_file = wavs[wavs_read]
         # Load in all of the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
-        # Restrict the frequencies of the song between lo_freq and hi_freq Hz
-        recording.restrict_chunk_frequencies(cfg_default.lo_freq, cfg_default.hi_freq)
-        # Threshold at threshold_cutoff
-        recording.threshold_chunks(cfg_default.threshold_cutoff)
-        # Pull out the features (# of archipelagos, distance between archipelagos, etc...)
-        recording.locate_archipelagos()
+        # Do all of the preprocessing and feature extraction
+        recording.standard_process()
+        # Save the information to the database
+        recording.insert_to_database(c)
+        conn.commit()
 
         recordings.append(recording)
         num_chunks += len(recording.song_chunks)
@@ -277,10 +365,11 @@ if __name__ == "__main__":
         for rec_chunk in recording:
             # Throw out outliers and totally noisy samples
             if rec_chunk.avg_archipelago_size() < 80 and rec_chunk.num_archipelagos() > 0:
-                chunk_data.append([rec_chunk.num_archipelagos(), rec_chunk.avg_archipelago_size()])
+                chunk_data.append([rec_chunk.num_archipelagos(), rec_chunk.avg_archipelago_size(),
+                                   rec_chunk.avg_archipelago_density()])
 
     # K-Means
-    num_clusters = 4
+    num_clusters = 2
     kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(chunk_data)
 
     for i in range(num_clusters):
@@ -288,8 +377,9 @@ if __name__ == "__main__":
             if label == i:
                 plt.scatter(chunk_data[label_idx][0], chunk_data[label_idx][1], color='C{}'.format(i))
 
+    plt.xlabel("Number of archipelagos")
+    plt.ylabel("Average archipelago size")
     plt.show()
 
-    with open(sys.argv[2], 'wb') as f:
-        for recording in recordings:
-            pickle.dump(recording, f)
+    # Close connection with the database
+    conn.close()
