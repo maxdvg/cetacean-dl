@@ -7,6 +7,11 @@
 # sys.argv[2] is a .db SQLite file which contains the database of information
 # sys.argv[3] is the path where the spectrograms which are generated should be saved
 
+# TODO: Choose a better way to interact with conn
+# WARNING: THE REMAINDER OF THE RECORDING (RECORDING-LENGTH % CHUNK-LENGTH) IS SIMPLY THROWN AWAY
+# AS WRITTEN, THIS PROGRAM IS FOR PULLING GOOD WHALE DATA, NOT AUTOMATICALLY DETECTING WHALES. ANY
+# WHALE CALLS WHICH APPEAR IN THE REMAINDER OF THE RECORDING AREN'T DETECTED AS THE PROGRAM STANDS
+
 import copy
 from collections import namedtuple
 import math
@@ -21,6 +26,7 @@ from select_and_search import DenseArchipelago, archipelago_expander,\
     regenerate_from_archipelagos, colormesh_spectrogram
 import sqlite3
 import sys
+import time
 
 # Default values for processing recordings
 Config = namedtuple('Config', ['chunk_len', 'lo_freq', 'hi_freq', 'min_land_mass',
@@ -52,6 +58,16 @@ class AlreadyInitializedError(Exception):
         return "{}: Attempted to reset value {} to {}".format(self.message, self.value, self.attempted_value)
 
 
+def bool_to_sqlite(val):
+    """
+    :param val: A boolean
+    :return: 1 if val is True, 0 if val is False
+    """
+    if val:
+        return 1
+    return 0
+
+
 class SongChunk:
     def __init__(self, samples, sample_rate, chunk_pos, parent_path):
         """
@@ -71,6 +87,7 @@ class SongChunk:
         self._threshold_cutoff = None
         self._lo_freq = None
         self._hi_freq = None
+        self.spec_in_memory = False
 
     def restrict_frequencies(self, freq_lo, freq_hi):
         """
@@ -109,6 +126,7 @@ class SongChunk:
         if self._archipelagos_initialized:
             raise AlreadyInitializedError(self._archipelagos_initialized, True, "Archipelagos already initialized")
 
+        # The process of finding the archipelagos in the spectrogram takes about .25 seconds per chunk on ACS2
         spec = copy.deepcopy(self.spectrogram)
         for row_idx, row in enumerate(spec):
             for point_idx, point in enumerate(row):
@@ -145,14 +163,26 @@ class SongChunk:
         self.spectrogram = self.spectrogram * (self.spectrogram >= cutoff)
         self._threshold_cutoff = cutoff_fraction
 
-    def save_chunk(self):
+    def save_chunk(self, c):
         """
-        Save the spectrogram which corresponds to the SongChunk
+        Save the spectrogram which corresponds to the SongChunk, if it isn't already saved in the database
         """
-        # Save spectrogram image without axes or any surrounding whitespace
-        plt.pcolormesh(self.times, self.frequencies, self.spectrogram, shading='gouraud')
-        plt.axis("off")
-        plt.savefig(self.specname, bbox_inches="tight")
+        # First check whether the spectrogram already exists in the location through the database
+        c.execute("SELECT SpecWritten FROM chunks where SpecPath='{}'".format(self.specname))
+        db_entry = c.fetchone()
+        # db_entry == 0 implies chunk is in database but spectrogram not yet written to memory
+        # db_entry is None implies the chunk is not yet in the database
+        if db_entry is None or db_entry[0] == 0:
+            # Save spectrogram image without axes or any surrounding whitespace
+            plt.pcolormesh(self.times, self.frequencies, self.spectrogram, shading='gouraud')
+            plt.axis("off")
+            plt.savefig(self.specname, bbox_inches="tight")
+            self.spec_in_memory = True
+
+            # Update the database entry to show that the spectrogram has been written to memory
+            # if the chunk is already in the database
+            if db_entry is not None:
+                c.execute("UPDATE chunks SET SpecWritten=1 where SpecPath='{}'".format(self.specname))
 
     def num_archipelagos(self):
         """
@@ -206,11 +236,12 @@ class SongChunk:
         :return:
         """
         # Insert the SongChunk into the chunks table
-        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize) "
-                  "VALUES ('{}', '{}', '{}', '{}')".format(self.specname,
-                                                           fid,
-                                                           self.num_archipelagos(),
-                                                           self.avg_archipelago_size()))
+        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize, SpecWritten) "
+                  "VALUES ('{}', '{}', '{}', '{}', '{}')".format(self.specname,
+                                                                 fid,
+                                                                 self.num_archipelagos(),
+                                                                 self.avg_archipelago_size(),
+                                                                 bool_to_sqlite(self.spec_in_memory)))
         # Get the RowID of the SongChunk we just inserted
         c.execute("SELECT last_insert_rowid()")
         chunk_id = c.fetchone()[0]
@@ -241,20 +272,32 @@ class Recording:
         :param song_wav: wav file containing the whale song
         :param chunk_len: The length, in seconds, that each 'chunk' of the recording should be
         """
-        # TODO: Decimate .wav for faster processing
-        self.song_wav = song_wav
-        self.chunk_len = chunk_len
-        # Read in the song_wav
-        sample_rate, samples = wavfile.read(song_wav)
+        # Check if it already exists in the database, and if so abort creation of new object
+        c.execute("SELECT * FROM recordings where Path='{}'".format(song_wav))
+        if c.fetchone() is not None:
+            self.load = False
+        else:
+            self.song_wav = song_wav
+            self.chunk_len = chunk_len
+            # Read in the song_wav
+            sample_rate, samples = wavfile.read(song_wav)
 
-        # Populate array of SongChunk objects which as a whole represent the entire song_wav recording
-        self.song_chunks = []
-        total_length = float(samples.shape[0] / sample_rate)
-        for i in range(math.floor(total_length / chunk_len)):
-            # Downsamples to cfg_default.recording_rate
-            self.song_chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
-                                                 int(sample_rate/cfg_default.recording_rate)],
-                                         cfg_default.recording_rate, i, song_wav))
+            # Populate array of SongChunk objects which as a whole represent the entire song_wav recording
+            self.song_chunks = []
+            total_length = float(samples.shape[0] / sample_rate)
+            for i in range(math.floor(total_length / chunk_len)):
+                # Downsamples to cfg_default.recording_rate
+                self.song_chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
+                                                     int(sample_rate/cfg_default.recording_rate)],
+                                             cfg_default.recording_rate, i, song_wav))
+            self.load = True
+
+    def __bool__(self):
+        """
+        :return: False if user attempts to initialize a Record which has already been added to the database
+        True otherwise
+        """
+        return self.load
 
     def restrict_chunk_frequencies(self, freq_lo, freq_hi):
         """
@@ -291,17 +334,27 @@ class Recording:
 
     def save_spectrograms(self):
         for chunk in self.song_chunks:
-            chunk.save_chunk()
+            chunk.save_chunk(c)
 
-    def standard_process(self):
+    def standard_process(self, write_spectrograms=True):
+        """
+        Performs the standard processing steps on each chunk which is in the recording
+        :param write_spectrograms:
+        :return:
+        """
         # Restrict the frequencies of the song between lo_freq and hi_freq Hz
+        # TIME < 1/100th of a second
         self.restrict_chunk_frequencies(cfg_default.lo_freq, cfg_default.hi_freq)
         # Threshold at threshold_cutoff
+        # TIME < 1/100th of a second
         self.threshold_chunks(cfg_default.threshold_cutoff)
         # Pull out the features (# of archipelagos, distance between archipelagos, etc...)
+        # TIME ~5 seconds
         self.locate_archipelagos()
         # Save the spectrogram images
-        self.save_spectrograms()
+        # TIME 1-2 MINUTES! save_spectrograms is the bottleneck
+        if write_spectrograms:
+            self.save_spectrograms()
 
     def insert_to_database(self, c):
         """
@@ -321,7 +374,7 @@ class Recording:
         c.execute("INSERT INTO recordings (Path) VALUES ('{}')".format(self.song_wav))
 
         # Get the FileID of the recording in the recordings table
-        c.execute("SELECT FileID FROM recordings WHERE Path='{}'".format(self.song_wav))
+        c.execute("SELECT last_insert_rowid()")
         fid = c.fetchone()[0]
         # Insert each of the song chunks into the chunks table
         for chunk in self.song_chunks:
@@ -353,7 +406,7 @@ def db_check(c):
         # Create RecordingTable
         c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
                   "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Classification INTEGER,"
-                  " ACPId, FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
+                  " ACPId, SpecWritten INTEGER, FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
     # Check that ArchipelagoTable exists
@@ -390,21 +443,27 @@ if __name__ == "__main__":
 
     # for wav_file in wavs:
 
-    wavs_read = 0
-    while wavs and wavs_read < 1:
+    wavs_read = 13
+    while wavs and wavs_read < 40:
+        start = time.time()
         wav_file = wavs[wavs_read]
         # Load in the song
         recording = Recording(pjoin(sys.argv[1], wav_file))
-        # Do all of the preprocessing and feature extraction
-        recording.standard_process()
-        # Save the information to the database
-        recording.insert_to_database(c)
-        conn.commit()
-        print("Added new record to database")
+        # If the recording hasn't already been parsed into the database
+        if recording:
+            # Do all of the preprocessing and feature extraction
+            recording.standard_process(write_spectrograms=False)  # NOT WRITING SPECTROGRAMS TO SAVE TIME!
+            # Save the information to the database
+            # TIME < .5 seconds
+            recording.insert_to_database(c)
+            conn.commit()
+            print("Added new record to database")
+            print("It took %.3f seconds to process" % (time.time() - start))
 
-        recordings.append(recording)
-        num_chunks += len(recording.song_chunks)
+            recordings.append(recording)
+            num_chunks += len(recording.song_chunks)
         wavs_read += 1
 
-    # Close connection with the database
+    # Commit any changes and close connection with the database
+    conn.commit()
     conn.close()
