@@ -12,6 +12,7 @@
 # AS WRITTEN, THIS PROGRAM IS FOR PULLING GOOD WHALE DATA, NOT AUTOMATICALLY DETECTING WHALES. ANY
 # WHALE CALLS WHICH APPEAR IN THE REMAINDER OF THE RECORDING AREN'T DETECTED AS THE PROGRAM STANDS
 
+import argparse
 import copy
 from collections import namedtuple
 import math
@@ -25,13 +26,12 @@ from scipy.io import wavfile
 from select_and_search import DenseArchipelago, archipelago_expander,\
     regenerate_from_archipelagos, colormesh_spectrogram
 import sqlite3
-import sys
 import time
 
 # Default values for processing recordings
 Config = namedtuple('Config', ['chunk_len', 'lo_freq', 'hi_freq', 'min_land_mass',
                                'max_gap', 'threshold_cutoff', 'recording_rate',
-                               'save_format', 'save_loc'])
+                               'save_format'])
 cfg_default = Config(
     chunk_len=20,
     lo_freq=200,
@@ -40,8 +40,7 @@ cfg_default = Config(
     max_gap=3,
     threshold_cutoff=.85,
     recording_rate=2048,
-    save_format=".png",
-    save_loc=sys.argv[3]
+    save_format=".png"
 )
 
 
@@ -77,7 +76,7 @@ class SongChunk:
         :param parent_path: The full path of the greater recording which the songchunk is a subsection of
         """
         self.frequencies, self.times, self.spectrogram = signal.spectrogram(samples, sample_rate)
-        self.specname = "{}-{}{}".format(pjoin(dirname(cfg_default.save_loc), basename(parent_path).split('.')[0]),
+        self.specname = "{}-{}{}".format(pjoin(dirname(args.spec_path), basename(parent_path).split('.')[0]),
                                           chunk_pos,
                                           cfg_default.save_format)
         self.archipelagos = []
@@ -430,25 +429,31 @@ def db_check(c):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("wav_directory", help="The directory containing the .wav files you wish to load")
+    parser.add_argument("db", help="The .db for the song database (creates new db here if non-existent)")
+    parser.add_argument("spec_path", help="The path to which any spectrograms generated will be written")
+    args = parser.parse_args()
+
     # Get handle for working with database
-    conn = sqlite3.connect(sys.argv[2])
+    conn = sqlite3.connect(args.db)
     c = conn.cursor()
     if not db_check(c):
-        print("{} did not contain all of the expected database tables when examined".format(sys.argv[2]))
+        print("{} did not contain all of the expected database tables when examined".format(args.db))
     conn.commit()
 
-    wavs = listdir(sys.argv[1])
+    wavs = listdir(args.wav_directory)
     recordings = []
     num_chunks = 0
 
     # for wav_file in wavs:
 
-    wavs_read = 13
-    while wavs and wavs_read < 40:
+    wavs_read = 40
+    while wavs and wavs_read < 41:
         start = time.time()
         wav_file = wavs[wavs_read]
         # Load in the song
-        recording = Recording(pjoin(sys.argv[1], wav_file))
+        recording = Recording(pjoin(args.wav_directory, wav_file))
         # If the recording hasn't already been parsed into the database
         if recording:
             # Do all of the preprocessing and feature extraction
