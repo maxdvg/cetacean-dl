@@ -8,7 +8,7 @@
 # sys.argv[3] is the path where the spectrograms which are generated should be saved
 
 # TODO: Choose a better way to interact with conn
-# WARNING: THE REMAINDER OF THE RECORDING (RECORDING-LENGTH % CHUNK-LENGTH) IS SIMPLY THROWN AWAY
+# WARNING: THE REMAINDER OF THE RECORDING (RECORDING-LENGTH % CHUNK-LENGTH) IS SIMPLY THROWN AWAY.
 # AS WRITTEN, THIS PROGRAM IS FOR PULLING GOOD WHALE DATA, NOT AUTOMATICALLY DETECTING WHALES. ANY
 # WHALE CALLS WHICH APPEAR IN THE REMAINDER OF THE RECORDING AREN'T DETECTED AS THE PROGRAM STANDS
 
@@ -68,17 +68,21 @@ def bool_to_sqlite(val):
 
 
 class SongChunk:
-    def __init__(self, samples, sample_rate, chunk_pos, parent_path):
+    def __init__(self, samples=None, sample_rate=None, chunk_pos=None, parent_path=None):
         """
         :param samples: The second parameter returned by scipy.wavfile.read() on a wav file
         :param sample_rate: The first parameter returned by scipy.wavfile.read() on a wav file
         :param chunk_pos: The position of the chunk within the greater recording
         :param parent_path: The full path of the greater recording which the songchunk is a subsection of
         """
-        self.frequencies, self.times, self.spectrogram = signal.spectrogram(samples, sample_rate)
-        self.specname = "{}-{}{}".format(pjoin(dirname(args.spec_path), basename(parent_path).split('.')[0]),
-                                          chunk_pos,
-                                          cfg_default.save_format)
+        # If a field is None then the instance is probably being built from the database,
+        # therefore it may not be desirable to reconstruct the spectrogram and other fields
+        if samples is not None and sample_rate is not None:
+            self.frequencies, self.times, self.spectrogram = signal.spectrogram(samples, sample_rate)
+        if parent_path is not None and chunk_pos is not None:
+            self.specname = "{}-{}{}".format(pjoin(dirname(args.spec_path), basename(parent_path).split('.')[0]),
+                                            chunk_pos,
+                                            cfg_default.save_format)
         self.archipelagos = []
         self._archipelagos_initialized = False
         self._min_land_mass = None
@@ -87,6 +91,47 @@ class SongChunk:
         self._lo_freq = None
         self._hi_freq = None
         self.spec_in_memory = False
+
+    @classmethod
+    def from_database_id(cls, record_id, db_connection):
+        """
+        Create a SongChunk instance from data already stored in the database. Does NOT load spectrogram into memory,
+        only the archipelagos and data about where the spectrogram image is stored are loaded into the instance
+        :param record_id: The RecordID of the SongChunk in the database that should be turned into an instance
+        :param db_connection: A connection to the SQLite3 database
+        :return: A SongChunk instance which has its specname, archipelagos, and spec_in_memory fields populated
+        using the data in the database pointed to by db_connection
+        """
+        chunk = SongChunk()
+
+        # Get the specpath
+        db_connection.execute("SELECT SpecPath FROM chunks where RecordID={}".format(record_id))
+        path = db_connection.fetchone()
+        # Couldn't find chunk with RecordID record_id in the database
+        if path is None:
+            raise sqlite3.ProgrammingError("The RecordID ({}) of the chunk you tried to load wasn't"
+                                           " found in the database".format(record_id))
+        chunk.specname = path[0]
+
+        # Fetch if the spectrogram has actually been stored at the Specpath
+        db_connection.execute("SELECT SpecWritten FROM chunks where RecordID={}".format(record_id))
+        chunk.spec_in_memory = bool(db_connection.fetchone()[0])
+
+        # Check if there are archipelagos for the chunk
+        db_connection.execute("SELECT NumACP FROM chunks where RecordID={}".format(record_id))
+        num_acp = db_connection.fetchone()[0]
+        if num_acp:
+            # Fetch the archipelagos if there are supposed to be archipelagos
+            db_connection.execute("SELECT ArchID FROM archs where ParentChunk={}".format(record_id))
+            archs = db_connection.fetchall()
+            if len(archs) != num_acp:
+                raise sqlite3.ProgrammingError("Did not find the expected number of archipelagos in the database. "
+                                               "Expected: {}, Found: {}".format(num_acp, len(archs)))
+            for arch in archs:
+                chunk.archipelagos.append(DenseArchipelago.from_database_id(arch[0], db_connection))
+        chunk._archipelagos_initialized = True
+
+        return chunk
 
     def restrict_frequencies(self, freq_lo, freq_hi):
         """

@@ -7,6 +7,7 @@ from scipy import signal
 from scipy.io import wavfile
 import copy
 import numpy as np
+import sqlite3
 import sys
 import math
 import time
@@ -89,6 +90,39 @@ class DenseArchipelago:
             self.left_bd = self.right_bd = None
         # List containing all of the points within the archipelago
         self.land = []
+
+    @classmethod
+    def from_database_id(cls, arch_id, db_connection):
+        """
+        Load in a DenseArchipelago from the database
+        :param arch_id: The ArchID in the database which corresponds to the DenseArchipelago we will be loading
+        :param db_connection: The connection to the SQLite3 database
+        :return: A DenseArchipelago instance which corresponds exactly to the archipelago with ArchID=arch_id in the
+        database pointed to by db_connection
+        """
+        load_arch = DenseArchipelago()
+        # Get the bounding box
+        db_connection.execute("SELECT LeftBd FROM archs WHERE ArchID={}".format(arch_id))
+        left_bd = db_connection.fetchone()
+        if left_bd is None:
+            raise sqlite3.ProgrammingError("The archipelago with ArchId={} isn't in the database".format(arch_id))
+        load_arch.left_bd = left_bd[0]
+        db_connection.execute("SELECT RightBd FROM archs WHERE ArchID={}".format(arch_id))
+        load_arch.right_bd = db_connection.fetchone()[0]
+        db_connection.execute("SELECT UpBd FROM archs WHERE ArchID={}".format(arch_id))
+        load_arch.upper_bd = db_connection.fetchone()[0]
+        db_connection.execute("SELECT LowBd FROM archs WHERE ArchID={}".format(arch_id))
+        load_arch.lower_bd = db_connection.fetchone()[0]
+
+        # Load all of the land into the archipelago
+        db_connection.execute("SELECT X, Y FROM land WHERE ParentArchipelago={}".format(arch_id))
+        lands = db_connection.fetchall()
+        if not lands:
+            raise sqlite3.ProgrammingError("Unable to find land associated with ArchId={} in database".format(arch_id))
+        for land in lands:
+            load_arch.land.append(land)
+
+        return load_arch
 
     def add_point(self, location):
         """
