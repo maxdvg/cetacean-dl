@@ -119,8 +119,8 @@ class DenseArchipelago:
         lands = db_connection.fetchall()
         if not lands:
             raise sqlite3.ProgrammingError("Unable to find land associated with ArchId={} in database".format(arch_id))
-        for land in lands:
-            load_arch.land.append(land)
+        for land_piece in lands:
+            load_arch.land.append(land_piece)
 
         return load_arch
 

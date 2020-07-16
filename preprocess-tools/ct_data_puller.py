@@ -40,7 +40,7 @@ cfg_default = Config(
     max_gap=3,
     threshold_cutoff=.85,
     recording_rate=2048,
-    save_format=".png"
+    save_format=".png",
 )
 
 
@@ -75,10 +75,12 @@ class SongChunk:
         :param chunk_pos: The position of the chunk within the greater recording
         :param parent_path: The full path of the greater recording which the songchunk is a subsection of
         """
-        # If a field is None then the instance is probably being built from the database,
+        # If a field is None then the instance is being built from the database,
         # therefore it may not be desirable to reconstruct the spectrogram and other fields
         if samples is not None and sample_rate is not None:
             self.frequencies, self.times, self.spectrogram = signal.spectrogram(samples, sample_rate)
+            self.height = self.spectrogram.shape[0]
+            self.width = self.spectrogram.shape[1]
         if parent_path is not None and chunk_pos is not None:
             self.specname = "{}-{}{}".format(pjoin(dirname(args.spec_path), basename(parent_path).split('.')[0]),
                                             chunk_pos,
@@ -130,6 +132,9 @@ class SongChunk:
             for arch in archs:
                 chunk.archipelagos.append(DenseArchipelago.from_database_id(arch[0], db_connection))
         chunk._archipelagos_initialized = True
+
+        db_connection.execute("SELECT Height, Width FROM chunks where RecordID={}".format(record_id))
+        chunk.height, chunk.width = db_connection.fetchone()
 
         return chunk
 
@@ -186,6 +191,14 @@ class SongChunk:
         self._archipelagos_initialized = True
         self._min_land_mass = min_land_mass
         self._max_gap = max_gap
+
+    def display_archipelagos(self):
+        img = np.zeros((self.height, self.width))
+        for arch in self.archipelagos:
+            for land in arch.land:
+                img[land[1]][land[0]] = 1
+        plt.imshow(img)
+        plt.show()
 
     def threshold(self, cutoff_fraction=cfg_default.threshold_cutoff):
         """
@@ -280,12 +293,14 @@ class SongChunk:
         :return:
         """
         # Insert the SongChunk into the chunks table
-        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize, SpecWritten) "
-                  "VALUES ('{}', '{}', '{}', '{}', '{}')".format(self.specname,
-                                                                 fid,
-                                                                 self.num_archipelagos(),
-                                                                 self.avg_archipelago_size(),
-                                                                 bool_to_sqlite(self.spec_in_memory)))
+        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize, SpecWritten, Width, Height) "
+                  "VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(self.specname,
+                                                                             fid,
+                                                                             self.num_archipelagos(),
+                                                                             self.avg_archipelago_size(),
+                                                                             bool_to_sqlite(self.spec_in_memory),
+                                                                             self.spectrogram.shape[1],
+                                                                             self.spectrogram.shape[0]))
         # Get the RowID of the SongChunk we just inserted
         c.execute("SELECT last_insert_rowid()")
         chunk_id = c.fetchone()[0]
@@ -450,7 +465,8 @@ def db_check(c):
         # Create RecordingTable
         c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
                   "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Classification INTEGER,"
-                  " ACPId, SpecWritten INTEGER, FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
+                  " ACPId, SpecWritten INTEGER, Width INTEGER, Height INTEGER, "
+                  "FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
     # Check that ArchipelagoTable exists
@@ -493,8 +509,8 @@ if __name__ == "__main__":
 
     # for wav_file in wavs:
 
-    wavs_read = 40
-    while wavs and wavs_read < 41:
+    wavs_read = 0
+    while wavs and wavs_read < 5:
         start = time.time()
         wav_file = wavs[wavs_read]
         # Load in the song
