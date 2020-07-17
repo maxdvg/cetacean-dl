@@ -51,7 +51,7 @@ def colormesh_spectrogram(spectrogram, times, frequencies, title, save=False):
     plt.show()
 
 
-def denoise(image, times, frequencies, display=True):
+def denoise(image, times=None, frequencies=None, display=True):
     """
     (Intended for use on noisy spectrograms)
     Denoise an image by removing all pixels from each row which are less than the (mean + std deviation) of that

@@ -5,6 +5,10 @@
 # See EXPLANATORY_FILE for information on the database
 
 from ct_data_puller import SongChunk, cfg_default
+import numpy as np
+import random
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.datasets import make_classification
 import subprocess
 import sqlite3
 import time
@@ -19,7 +23,7 @@ def invoke_raven_pro(audio_file):
     :param audio_file: The full path to the audio file to be opened in RavenPro
     :return: None
     """
-    subprocess.call('"{}" "{}"'.format(RAVEN_PRO_PATH, audio_file))
+    subprocess.Popen('"{}" "{}"'.format(RAVEN_PRO_PATH, audio_file), stderr=subprocess.DEVNULL, shell=True)
 
 
 def get_valid_input(valid_input_dict, prompt):
@@ -60,21 +64,20 @@ def manual_database_classify(db_connection, record_id):
     chunk = SongChunk.from_database_id(record_id, db_connection)
     chunk.display_archipelagos()
 
+    # Let user know where the clip starts in the full spectrogram
+    db_connection.execute("SELECT SpecPath from chunks where RecordID={}".format(record_id))
+    pos_in_record = int(db_connection.fetchone()[0].split('.')[0].split('-')[-1])
+    print("Clip starts at {}".format(time.strftime('%H:%M:%S', time.gmtime(cfg_default.chunk_len * pos_in_record))))
+
     # Get user input as to what the classification should be
     # 0 = Definitely no whale song in the chunk
     # 1 =  Definitely whale song in the chunk
     # 2 = Unsure, experienced opinion needed for checking
     accepted_inputs = {'0': "No whale song", '1': "Whale song", '2': "Uncertain"}
-    manual_classification = get_valid_input(accepted_inputs, "What do you classify this chunk?: ")
+    manual_classification = get_valid_input(accepted_inputs, "RID={} What do you classify this chunk?: ".format(record_id))
     # Show full spectrogram if unsure
     if manual_classification == '2':
         print("Fetching RavenPro spectrogram")
-
-        # Let user know where the clip starts in the full spectrogram
-        db_connection.execute("SELECT SpecPath from chunks where RecordID={}".format(record_id))
-        pos_in_record = int(db_connection.fetchone()[0].split('.')[0][-1])
-        print("Clip starts at {}".format(time.strftime('%H:%M:%S', time.gmtime(cfg_default.chunk_len * pos_in_record))))
-        time.sleep(1)
 
         db_connection.execute("SELECT ParentRecording from chunks where RecordID={}".format(record_id))
         parent_record = int(db_connection.fetchone()[0])
@@ -94,11 +97,40 @@ if __name__ == "__main__":
     # Get handle for working with database
     conn = sqlite3.connect('new_data.db')
     c = conn.cursor()
-    for i in range(5):
-        manual_database_classify(c, i + 1)
+
+    # Give images for the user to manually classify
+    # for i in range(310, 500):
+    #     manual_database_classify(c, i + 1)
+    #     conn.commit()
+
+    # Random forest classifier
+    # Get all of the data which has been classified by hand and load it into a numpy array
+    c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE Classification is not null")
+    data = c.fetchall()
+    X = np.ndarray([len(data), len(data[0])])
+    for datum_idx, datum in enumerate(data):
+        for sub_idx in range(len(datum)):
+            X[datum_idx][sub_idx] = datum[sub_idx]
+
+    # Get all of the hand classifications
+    c.execute("SELECT Classification FROM chunks WHERE Classification is not null")
+    classifications = c.fetchall()
+    y = np.ndarray([len(classifications)])
+    for c_idx, classification in enumerate(classifications):
+        y[c_idx] = classification[0]
+
+    clf = RandomForestClassifier(max_depth=2, random_state=0)
+    clf.fit(X, y)
+
+    # See how what it fits to some random data
+    for i in range(15):
+        random_selection = random.randint(500, 750)
+        manual_database_classify(c, random_selection)
+        c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE RecordID={}".format(random_selection))
+        d = c.fetchone()
+        print("The random forest classifier chose {}".format(clf.predict([[d[0], d[1]]])))
         conn.commit()
 
-    print("Success?")
 
     # Commit and close DB connection
     conn.commit()

@@ -24,7 +24,7 @@ from os.path import basename, dirname
 from scipy import signal
 from scipy.io import wavfile
 from select_and_search import DenseArchipelago, archipelago_expander,\
-    regenerate_from_archipelagos, colormesh_spectrogram
+    regenerate_from_archipelagos, colormesh_spectrogram, denoise
 import sqlite3
 import time
 
@@ -196,7 +196,7 @@ class SongChunk:
         img = np.zeros((self.height, self.width))
         for arch in self.archipelagos:
             for land in arch.land:
-                img[land[1]][land[0]] = 1
+                img[self.height - 1 - land[1]][land[0]] = 1
         plt.imshow(img)
         plt.show()
 
@@ -219,6 +219,9 @@ class SongChunk:
         cutoff = np.partition(flat, cutoff_pos)[cutoff_pos]
         self.spectrogram = self.spectrogram * (self.spectrogram >= cutoff)
         self._threshold_cutoff = cutoff_fraction
+
+    def rowwise_statistical_threshold(self):
+        self.spectrogram = denoise(self.spectrogram, display=False)
 
     def save_chunk(self, c):
         """
@@ -404,9 +407,10 @@ class Recording:
         # Restrict the frequencies of the song between lo_freq and hi_freq Hz
         # TIME < 1/100th of a second
         self.restrict_chunk_frequencies(cfg_default.lo_freq, cfg_default.hi_freq)
-        # Threshold at threshold_cutoff
+        # Rowwise threshold
         # TIME < 1/100th of a second
-        self.threshold_chunks(cfg_default.threshold_cutoff)
+        for chunk in self.song_chunks:
+            chunk.rowwise_statistical_threshold()
         # Pull out the features (# of archipelagos, distance between archipelagos, etc...)
         # TIME ~5 seconds
         self.locate_archipelagos()
@@ -510,7 +514,7 @@ if __name__ == "__main__":
     # for wav_file in wavs:
 
     wavs_read = 0
-    while wavs and wavs_read < 5:
+    while wavs and wavs_read < 120:
         start = time.time()
         wav_file = wavs[wavs_read]
         # Load in the song
