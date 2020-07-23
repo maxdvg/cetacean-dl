@@ -7,11 +7,9 @@
 import argparse
 from ct_data_puller import SongChunk, cfg_default
 import numpy as np
-import random
 from sklearn.ensemble import RandomForestClassifier
 import subprocess
 import sqlite3
-import sys
 import time
 
 RAVEN_PRO_PATH = "C:\\Users\\ACS-2\\Raven Pro 1.4\\Raven.exe"
@@ -93,14 +91,32 @@ def manual_database_classify(db_connection, record_id):
     return True
 
 
-def get_random_forest(table: str, db_connection, desired_tp_rate: float, *col_names):
+def feature_list_to_string(feat_list):
+    """
+    Turns a list of strings into a comma seperated string. Intended to make working with feature column names easier
+    by providing a conversion between Python lists and SQLite command format
+    :param feat_list: A list of strings. E.G. ["a", "b", "x"]
+    :raises Exception: If feat_list is empty
+    :return: A comma seperated string of all the values in 'feat_list'; E.G. "a, b, x" for the example feat_list
+    """
+    if not feat_list:
+        raise Exception("Your feature list cannot be empty")
+
+    ret_str = feat_list[0]
+    for col_name in feat_list[1:]:
+        ret_str += ", {}".format(col_name)
+    return ret_str
+
+
+
+def get_random_forest(table: str, db_cursor, desired_tp_rate: float, col_names):
     """
     Create a random forest classifier on the database using all of the data which has been hand labeled
-    :param db_connection: Connection to the database which has the
+    :param db_cursor: Connection to the database which has the
     :param table: The table from which to read in the data to train the random forest classifier
     :param desired_tp_rate: The desired rate of ((True Positives) / (True Positives + False Positives)_
-    :param col_names: Names of the columns which we want to use to train the random forest classifier on. E.G., if we
-    want to use AvgACPSize and NumACP only to train the classifier, then we pass "AvgACPSize", "NumACP"
+    :param col_names: A list of names of the columns which we want to use to train the random forest classifier on.
+     E.G., if we want to use AvgACPSize and NumACP only to train the classifier, then we pass ["AvgACPSize", "NumACP"]
     :raises Exception: If there is no cutoff such that the random forest achieves the desired true positive rate, then
     raises an Exception
     :return: A tuple containing:
@@ -108,16 +124,12 @@ def get_random_forest(table: str, db_connection, desired_tp_rate: float, *col_na
     table 'table'
         2) The lowest 'cutoff' for probabilities in the random forest which gives the desired_tp_rate
     """
-    if len(col_names) == 0:
-        raise Exception("You must specify at least one column name from which the random forest can learn")
+
 
     # Get all of the data which has been classified by hand from the database
-    search_cmd = "SELECT " + col_names[0]
-    for col_name in col_names[1:]:
-        search_cmd += ", {}".format(col_name)
-    search_cmd += " FROM {} WHERE Label is not null".format(table)
-    db_connection.execute(search_cmd)
-    labeled_data = db_connection.fetchall()
+    search_cmd = "SELECT {} FROM {} WHERE Label is not null".format(feature_list_to_string(col_names), table)
+    db_cursor.execute(search_cmd)
+    labeled_data = db_cursor.fetchall()
 
     # Load all of that data into a numpy array for compatibility with SKLearn random forest classifier
     X = np.ndarray([len(labeled_data), len(labeled_data[0])])
@@ -126,8 +138,8 @@ def get_random_forest(table: str, db_connection, desired_tp_rate: float, *col_na
             X[datum_idx][sub_idx] = datum[sub_idx]
 
     # Get all labels and load them into a seperate numpy array for the SKLearn random forest classifier
-    db_connection.execute("SELECT Label FROM chunks WHERE Label is not null")
-    labels = db_connection.fetchall()
+    db_cursor.execute("SELECT Label FROM chunks WHERE Label is not null")
+    labels = db_cursor.fetchall()
     y = np.ndarray([len(labels)])
     for c_idx, classification in enumerate(labels):
         y[c_idx] = classification[0]
@@ -161,6 +173,38 @@ def get_random_forest(table: str, db_connection, desired_tp_rate: float, *col_na
     return clf, optimal_cutoff
 
 
+def predict_for_entire_database(table, db_cursor, db_connection, rf_classifier, prediction_col, col_names):
+    """
+    Use the random forest classifier 'rf_classifier' to make label predictions for everything in the database pointed
+    to by 'db_cursor'. Stores predictions in the 'prediction_col' of the database
+    :param table: The name of the table in the database which will be classified
+    :param db_cursor: Cursor to the database
+    :param db_connection: Connection to the database
+    :param rf_classifier: The random forest classifier which can make probabilistic predictions about the data in
+    the database
+    :param prediction_col: The name of the column which the prediction should be stored in in 'table'
+    :param col_names: A list containing the names of the features which are used by 'rf_classifier' to make a
+    classification
+    :return: None
+    """
+    # WARNING: THIS COULD BREAK FOR VERY LARGE TABLES IF MEMORY RUNS OUT
+    # Extract all of the useful features from the desired database table
+    db_cursor.execute("SELECT {} FROM chunks".format(feature_list_to_string(col_names)))
+    data = db_cursor.fetchall()
+
+    # Load the features into a numpy array that the random forest accepts
+    features = np.empty([len(data), len(data[0])])
+    for datum_idx, datum in enumerate(data):
+        for feat_idx, feature in enumerate(datum):
+            features[datum_idx][feat_idx] = feature
+
+    # Get the prediction probabilities for each of the rows in the table and store it in the prediction column
+    rf_pred_probs = rf_classifier.predict_proba(features)
+    for rf_idx, rf_pred in enumerate(rf_pred_probs):
+        db_cursor.execute("UPDATE {} SET {}={} WHERE rowid={}".format(table, prediction_col, rf_pred[1], rf_idx))
+        db_connection.commit()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("db", help="The .db for the song database")
@@ -171,27 +215,10 @@ if __name__ == "__main__":
     conn = sqlite3.connect(sys_args.db)
     c = conn.cursor()
 
-    random_forest, cutoff = get_random_forest("chunks", c, .95, "NumACP", "AvgACPSize", "AvgACPDensity")
+    feature_columns = ["NumACP", "AvgACPSize", "AvgACPDensity"]
 
+    random_forest, cutoff = get_random_forest("chunks", c, .95, feature_columns)
+    predict_for_entire_database("chunks", c, conn, random_forest, "RFPredForOne", feature_columns)
 
-    print("hey?")
-    # # Give images for the user to manually classify
-    # for i in range(310, 500):
-    #     manual_database_classify(c, i + 1)
-    #     conn.commit()
-
-
-    # # See how what it fits to some random data
-    # for i in range(15):
-    #     random_selection = random.randint(500, 750)
-    #     manual_database_classify(c, random_selection)
-    #     c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE RecordID={}".format(random_selection))
-    #     d = c.fetchone()
-    #     print("The random forest classifier chose {}".format(clf.predict([[d[0], d[1]]])))
-    #     conn.commit()
-
-
-    # Commit and close DB connection
-    conn.commit()
+    # Close DB connection
     conn.close()
-
