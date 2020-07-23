@@ -512,12 +512,8 @@ if __name__ == "__main__":
     recordings = []
     num_chunks = 0
 
-    # for wav_file in wavs:
-
-    wavs_read = 0
-    while wavs and wavs_read < 120:
+    for wav_file in wavs:
         start = time.time()
-        wav_file = wavs[wavs_read]
         # Load in the song
         recording = Recording(pjoin(args.wav_directory, wav_file))
         # If the recording hasn't already been parsed into the database
@@ -533,7 +529,6 @@ if __name__ == "__main__":
 
             recordings.append(recording)
             num_chunks += len(recording.song_chunks)
-        wavs_read += 1
 
     # Commit any changes and close connection with the database
     conn.commit()
