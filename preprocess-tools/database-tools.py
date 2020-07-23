@@ -4,12 +4,14 @@
 # Tools for interacting with database created by ct-data-puller.py
 # See EXPLANATORY_FILE for information on the database
 
+import argparse
 from ct_data_puller import SongChunk, cfg_default
 import numpy as np
 import random
 from sklearn.ensemble import RandomForestClassifier
 import subprocess
 import sqlite3
+import sys
 import time
 
 RAVEN_PRO_PATH = "C:\\Users\\ACS-2\\Raven Pro 1.4\\Raven.exe"
@@ -91,29 +93,41 @@ def manual_database_classify(db_connection, record_id):
     return True
 
 
-if __name__ == "__main__":
-    # connect to database
-    # Get handle for working with database
-    conn = sqlite3.connect('new_data.db')
-    c = conn.cursor()
+def get_random_forest(table: str, db_connection, desired_tp_rate: float, *col_names):
+    """
+    Create a random forest classifier on the database using all of the data which has been hand labeled
+    :param db_connection: Connection to the database which has the
+    :param table: The table from which to read in the data to train the random forest classifier
+    :param desired_tp_rate: The desired rate of ((True Positives) / (True Positives + False Positives)_
+    :param col_names: Names of the columns which we want to use to train the random forest classifier on. E.G., if we
+    want to use AvgACPSize and NumACP only to train the classifier, then we pass "AvgACPSize", "NumACP"
+    :raises Exception: If there is no cutoff such that the random forest achieves the desired true positive rate, then
+    raises an Exception
+    :return: A tuple containing:
+        1) A SKLearn random forest classifier that has learned on the parameters specified in 'col_names' from the
+    table 'table'
+        2) The lowest 'cutoff' for probabilities in the random forest which gives the desired_tp_rate
+    """
+    if len(col_names) == 0:
+        raise Exception("You must specify at least one column name from which the random forest can learn")
 
-    # Give images for the user to manually classify
-    for i in range(310, 500):
-        manual_database_classify(c, i + 1)
-        conn.commit()
+    # Get all of the data which has been classified by hand from the database
+    search_cmd = "SELECT " + col_names[0]
+    for col_name in col_names[1:]:
+        search_cmd += ", {}".format(col_name)
+    search_cmd += " FROM {} WHERE Label is not null".format(table)
+    db_connection.execute(search_cmd)
+    labeled_data = db_connection.fetchall()
 
-    # Random forest classifier
-    # Get all of the data which has been classified by hand and load it into a numpy array
-    c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE Label is not null")
-    data = c.fetchall()
-    X = np.ndarray([len(data), len(data[0])])
-    for datum_idx, datum in enumerate(data):
+    # Load all of that data into a numpy array for compatibility with SKLearn random forest classifier
+    X = np.ndarray([len(labeled_data), len(labeled_data[0])])
+    for datum_idx, datum in enumerate(labeled_data):
         for sub_idx in range(len(datum)):
             X[datum_idx][sub_idx] = datum[sub_idx]
 
-    # Get all of the hand classifications
-    c.execute("SELECT Label FROM chunks WHERE Label is not null")
-    labels = c.fetchall()
+    # Get all labels and load them into a seperate numpy array for the SKLearn random forest classifier
+    db_connection.execute("SELECT Label FROM chunks WHERE Label is not null")
+    labels = db_connection.fetchall()
     y = np.ndarray([len(labels)])
     for c_idx, classification in enumerate(labels):
         y[c_idx] = classification[0]
@@ -121,37 +135,50 @@ if __name__ == "__main__":
     clf = RandomForestClassifier(max_depth=2, random_state=0)
     clf.fit(X, y)
 
-
-    # Analyize performance
+    # Analyize performance and find cutoff
     ps = clf.predict_proba(X)
-    cutoffs = [.05 * i for i in range(21)]
+    optimal_cutoff = None
+    candidate_cutoffs = [.05 * i for i in range(21)]
 
-    res = []
-    total_positives = []
-
-    for cutoff in cutoffs:
-        tp = 0
-        fp = 0
-        tot_pos = 0
-        for p, l in zip(ps, labels):
-            if p[1] >= cutoff:
-                tot_pos += 1
-                if l[0] == 1:
-                    tp += 1
+    for cutoff in candidate_cutoffs:
+        true_positives = 0
+        false_positives = 0
+        for probability, label in zip(ps, labels):
+            if probability[1] >= cutoff:
+                if label[0] == 1:
+                    true_positives += 1
                 else:
-                    fp += 1
-        if tp + fp != 0:
-            print("With cutoff {} we achieve a TP/FP of {}".format(cutoff, float(tp) / (tp + fp)))
-            res.append((cutoff, float(tp) / (tp + fp)))
-            total_positives.append(tot_pos)
-        else:
-            print("With cutoff {} nothing was classified as positive".format(cutoff))
+                    false_positives += 1
+        if true_positives + false_positives != 0:
+            tp_rate = float(true_positives) / (true_positives + false_positives)
+            if tp_rate > desired_tp_rate and optimal_cutoff is None:
+                optimal_cutoff = cutoff
+
+    # Fail if the desired true positive rate cannot be reached
+    if optimal_cutoff is None:
+        raise Exception("Random forest cannot yield a true positive rate as high as {}".format(desired_tp_rate))
+
+    return clf, optimal_cutoff
 
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("db", help="The .db for the song database")
+    sys_args = parser.parse_args()
 
-    print([x[0] for x in res])
-    print([x[1] for x in res])
-    print(total_positives)
+    # connect to database
+    # Get handle for working with database
+    conn = sqlite3.connect(sys_args.db)
+    c = conn.cursor()
+
+    random_forest, cutoff = get_random_forest("chunks", c, .95, "NumACP", "AvgACPSize", "AvgACPDensity")
+
+
+    print("hey?")
+    # # Give images for the user to manually classify
+    # for i in range(310, 500):
+    #     manual_database_classify(c, i + 1)
+    #     conn.commit()
 
 
     # # See how what it fits to some random data

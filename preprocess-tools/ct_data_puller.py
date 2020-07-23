@@ -470,7 +470,7 @@ def db_check(c):
         # Create RecordingTable
         c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
                   "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Label INTEGER,"
-                  " AvgACPDensity REAL, SpecWritten INTEGER, Width INTEGER, Height INTEGER, "
+                  " AvgACPDensity REAL, SpecWritten INTEGER, Width INTEGER, Height INTEGER, RFPredForOne REAL, "
                   "FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
