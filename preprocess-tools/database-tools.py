@@ -8,7 +8,6 @@ from ct_data_puller import SongChunk, cfg_default
 import numpy as np
 import random
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.datasets import make_classification
 import subprocess
 import sqlite3
 import time
@@ -55,7 +54,7 @@ def manual_database_classify(db_connection, record_id):
     in the database already.
     """
     # Check if the entry with RecordID == record_id already has a classification
-    db_connection.execute("SELECT Classification FROM chunks WHERE RecordID={}".format(record_id))
+    db_connection.execute("SELECT Label FROM chunks WHERE RecordID={}".format(record_id))
     preexisting_classification = db_connection.fetchone()[0]
     if preexisting_classification is not None:
         return False
@@ -87,7 +86,7 @@ def manual_database_classify(db_connection, record_id):
         manual_classification = get_valid_input(accepted_inputs, "What is your opinion after looking at the RavenPro: ")
 
     # Put the user's classification into the database
-    db_connection.execute("update chunks set Classification={} where RecordID={}".format(manual_classification,
+    db_connection.execute("update chunks set Label={} where RecordID={}".format(manual_classification,
                                                                                          record_id))
     return True
 
@@ -99,13 +98,13 @@ if __name__ == "__main__":
     c = conn.cursor()
 
     # Give images for the user to manually classify
-    # for i in range(310, 500):
-    #     manual_database_classify(c, i + 1)
-    #     conn.commit()
+    for i in range(310, 500):
+        manual_database_classify(c, i + 1)
+        conn.commit()
 
     # Random forest classifier
     # Get all of the data which has been classified by hand and load it into a numpy array
-    c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE Classification is not null")
+    c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE Label is not null")
     data = c.fetchall()
     X = np.ndarray([len(data), len(data[0])])
     for datum_idx, datum in enumerate(data):
@@ -113,23 +112,56 @@ if __name__ == "__main__":
             X[datum_idx][sub_idx] = datum[sub_idx]
 
     # Get all of the hand classifications
-    c.execute("SELECT Classification FROM chunks WHERE Classification is not null")
-    classifications = c.fetchall()
-    y = np.ndarray([len(classifications)])
-    for c_idx, classification in enumerate(classifications):
+    c.execute("SELECT Label FROM chunks WHERE Label is not null")
+    labels = c.fetchall()
+    y = np.ndarray([len(labels)])
+    for c_idx, classification in enumerate(labels):
         y[c_idx] = classification[0]
 
     clf = RandomForestClassifier(max_depth=2, random_state=0)
     clf.fit(X, y)
 
-    # See how what it fits to some random data
-    for i in range(15):
-        random_selection = random.randint(500, 750)
-        manual_database_classify(c, random_selection)
-        c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE RecordID={}".format(random_selection))
-        d = c.fetchone()
-        print("The random forest classifier chose {}".format(clf.predict([[d[0], d[1]]])))
-        conn.commit()
+
+    # Analyize performance
+    ps = clf.predict_proba(X)
+    cutoffs = [.05 * i for i in range(21)]
+
+    res = []
+    total_positives = []
+
+    for cutoff in cutoffs:
+        tp = 0
+        fp = 0
+        tot_pos = 0
+        for p, l in zip(ps, labels):
+            if p[1] >= cutoff:
+                tot_pos += 1
+                if l[0] == 1:
+                    tp += 1
+                else:
+                    fp += 1
+        if tp + fp != 0:
+            print("With cutoff {} we achieve a TP/FP of {}".format(cutoff, float(tp) / (tp + fp)))
+            res.append((cutoff, float(tp) / (tp + fp)))
+            total_positives.append(tot_pos)
+        else:
+            print("With cutoff {} nothing was classified as positive".format(cutoff))
+
+
+
+    print([x[0] for x in res])
+    print([x[1] for x in res])
+    print(total_positives)
+
+
+    # # See how what it fits to some random data
+    # for i in range(15):
+    #     random_selection = random.randint(500, 750)
+    #     manual_database_classify(c, random_selection)
+    #     c.execute("SELECT NumACP, AvgACPSize FROM chunks WHERE RecordID={}".format(random_selection))
+    #     d = c.fetchone()
+    #     print("The random forest classifier chose {}".format(clf.predict([[d[0], d[1]]])))
+    #     conn.commit()
 
 
     # Commit and close DB connection

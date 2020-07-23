@@ -156,7 +156,7 @@ class DenseArchipelago:
         :return: a float representing the proportion of the bounding box occupied
         by points in the archipelago
         """
-        volume = (self.right_bd - self.left_bd) * (self.upper_bd - self.lower_bd)
+        volume = (self.right_bd - self.left_bd + 1) * (self.upper_bd - self.lower_bd + 1)
         return self.size() / float(volume)
 
     def insert_to_database(self, c, song_chunk_id, ):

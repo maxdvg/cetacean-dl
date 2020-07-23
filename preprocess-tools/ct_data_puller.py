@@ -34,7 +34,7 @@ Config = namedtuple('Config', ['chunk_len', 'lo_freq', 'hi_freq', 'min_land_mass
                                'save_format'])
 cfg_default = Config(
     chunk_len=20,
-    lo_freq=200,
+    lo_freq=140,
     hi_freq=950,
     min_land_mass=12,
     max_gap=3,
@@ -296,11 +296,12 @@ class SongChunk:
         :return:
         """
         # Insert the SongChunk into the chunks table
-        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize, SpecWritten, Width, Height) "
-                  "VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(self.specname,
+        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize, AvgACPDensity, SpecWritten, Width, Height) "
+                  "VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(self.specname,
                                                                              fid,
                                                                              self.num_archipelagos(),
                                                                              self.avg_archipelago_size(),
+                                                                             self.avg_archipelago_density(),
                                                                              bool_to_sqlite(self.spec_in_memory),
                                                                              self.spectrogram.shape[1],
                                                                              self.spectrogram.shape[0]))
@@ -468,8 +469,8 @@ def db_check(c):
     if c.fetchone() is None:
         # Create RecordingTable
         c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
-                  "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Classification INTEGER,"
-                  " ACPId, SpecWritten INTEGER, Width INTEGER, Height INTEGER, "
+                  "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Label INTEGER,"
+                  " AvgACPDensity REAL, SpecWritten INTEGER, Width INTEGER, Height INTEGER, "
                   "FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
