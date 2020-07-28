@@ -49,19 +49,24 @@ def manual_database_classify(db_connection, record_id):
     about the portion of whale song which will be manually classified
     :param record_id: The RecordID field of the portion of the whale song which will be manually classified
     in the database
+    :raises Exception: If record_id is negative raises exception, because the unique ID in a sqlite database is
+    non-negative
     :return: True if a new manual classification for record_id was added to the
     database and there was no preexisting classification. False if there was a preexisting classification for record_id
     in the database already.
     """
+    if record_id <= 0:
+        raise Exception("record_id must be positive")
+
     # Check if the entry with RecordID == record_id already has a classification
     db_connection.execute("SELECT Label FROM chunks WHERE RecordID={}".format(record_id))
     preexisting_classification = db_connection.fetchone()[0]
     if preexisting_classification is not None:
         return False
 
-    # The chunk hasn't yet been classified in the database. Load object and display archipelagos
-    chunk = SongChunk.from_database_id(record_id, db_connection)
-    chunk.display_archipelagos()
+    # # The chunk hasn't yet been classified in the database. Load object and display archipelagos
+    # chunk = SongChunk.from_database_id(record_id, db_connection)
+    # chunk.reconstruct_archipelagos_image()
 
     # Let user know where the clip starts in the full spectrogram
     db_connection.execute("SELECT SpecPath from chunks where RecordID={}".format(record_id))
@@ -108,8 +113,7 @@ def feature_list_to_string(feat_list):
     return ret_str
 
 
-
-def get_random_forest(table: str, db_cursor, desired_tp_rate: float, col_names):
+def get_random_forest(table: str, db_cursor, desired_tp_rate: float, col_names, verbose=False):
     """
     Create a random forest classifier on the database using all of the data which has been hand labeled
     :param db_cursor: Connection to the database which has the
@@ -124,8 +128,6 @@ def get_random_forest(table: str, db_cursor, desired_tp_rate: float, col_names):
     table 'table'
         2) The lowest 'cutoff' for probabilities in the random forest which gives the desired_tp_rate
     """
-
-
     # Get all of the data which has been classified by hand from the database
     search_cmd = "SELECT {} FROM {} WHERE Label is not null".format(feature_list_to_string(col_names), table)
     db_cursor.execute(search_cmd)
@@ -152,19 +154,22 @@ def get_random_forest(table: str, db_cursor, desired_tp_rate: float, col_names):
     optimal_cutoff = None
     candidate_cutoffs = [.05 * i for i in range(21)]
 
-    for cutoff in candidate_cutoffs:
+    # TODO: Use numpy's powerful features!
+    for cand_cutoff in candidate_cutoffs:
         true_positives = 0
         false_positives = 0
         for probability, label in zip(ps, labels):
-            if probability[1] >= cutoff:
+            if probability[1] >= cand_cutoff:
                 if label[0] == 1:
                     true_positives += 1
                 else:
                     false_positives += 1
         if true_positives + false_positives != 0:
             tp_rate = float(true_positives) / (true_positives + false_positives)
+            if verbose:
+                print("Cutoff {} yields true positive rate of {}".format(cand_cutoff, tp_rate))
             if tp_rate > desired_tp_rate and optimal_cutoff is None:
-                optimal_cutoff = cutoff
+                optimal_cutoff = cand_cutoff
 
     # Fail if the desired true positive rate cannot be reached
     if optimal_cutoff is None:
@@ -215,10 +220,17 @@ if __name__ == "__main__":
     conn = sqlite3.connect(sys_args.db)
     c = conn.cursor()
 
+    # Get some manual classifications before generating a predictor
+    for i in range(1, 300):
+        manual_database_classify(c, i)
+        conn.commit()
+
+    # Generate predictions
     feature_columns = ["NumACP", "AvgACPSize", "AvgACPDensity"]
 
-    random_forest, cutoff = get_random_forest("chunks", c, .95, feature_columns)
+    random_forest, cutoff = get_random_forest("chunks", c, .95, feature_columns, verbose=True)
     predict_for_entire_database("chunks", c, conn, random_forest, "RFPredForOne", feature_columns)
 
     # Close DB connection
+    conn.commit()
     conn.close()

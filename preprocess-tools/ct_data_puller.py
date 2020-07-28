@@ -23,7 +23,7 @@ from os.path import join as pjoin
 from os.path import basename, dirname
 from scipy import signal
 from scipy.io import wavfile
-from select_and_search import DenseArchipelago, archipelago_expander,\
+from select_and_search import DenseArchipelago, archipelago_expander, \
     regenerate_from_archipelagos, colormesh_spectrogram, denoise
 import sqlite3
 import time
@@ -48,6 +48,7 @@ class AlreadyInitializedError(Exception):
     """
     Raised when user tries to change a variable which is already set
     """
+
     def __init__(self, value, attempted_value, message):
         self.value = value
         self.attempted_value = attempted_value
@@ -83,8 +84,8 @@ class SongChunk:
             self.width = self.spectrogram.shape[1]
         if parent_path is not None and chunk_pos is not None:
             self.specname = "{}-{}{}".format(pjoin(dirname(args.spec_path), basename(parent_path).split('.')[0]),
-                                            chunk_pos,
-                                            cfg_default.save_format)
+                                             chunk_pos,
+                                             cfg_default.save_format)
         self.archipelagos = []
         self._archipelagos_initialized = False
         self._min_land_mass = None
@@ -192,13 +193,21 @@ class SongChunk:
         self._min_land_mass = min_land_mass
         self._max_gap = max_gap
 
-    def display_archipelagos(self):
+    def reconstruct_archipelagos_image(self, show=True):
+        """
+        Using the land masses contained in the archipelagos of the chunk, reconstructs an image of all
+        the chunk's archipelagos (spatially correct)
+        :param show: If true, then displays the image which is reconstructed
+        :return: An np array which is the reconstructed image for the archipelago
+        """
         img = np.zeros((self.height, self.width))
         for arch in self.archipelagos:
             for land in arch.land:
                 img[self.height - 1 - land[1]][land[0]] = 1
-        plt.imshow(img)
-        plt.show()
+        if show:
+            plt.imshow(img)
+            plt.show()
+        return img
 
     def threshold(self, cutoff_fraction=cfg_default.threshold_cutoff):
         """
@@ -296,15 +305,16 @@ class SongChunk:
         :return:
         """
         # Insert the SongChunk into the chunks table
-        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP, AvgACPSize, AvgACPDensity, SpecWritten, Width, Height) "
+        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP,"
+                  " AvgACPSize, AvgACPDensity, SpecWritten, Width, Height) "
                   "VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(self.specname,
-                                                                             fid,
-                                                                             self.num_archipelagos(),
-                                                                             self.avg_archipelago_size(),
-                                                                             self.avg_archipelago_density(),
-                                                                             bool_to_sqlite(self.spec_in_memory),
-                                                                             self.spectrogram.shape[1],
-                                                                             self.spectrogram.shape[0]))
+                                                                                   fid,
+                                                                                   self.num_archipelagos(),
+                                                                                   self.avg_archipelago_size(),
+                                                                                   self.avg_archipelago_density(),
+                                                                                   bool_to_sqlite(self.spec_in_memory),
+                                                                                   self.spectrogram.shape[1],
+                                                                                   self.spectrogram.shape[0]))
         # Get the RowID of the SongChunk we just inserted
         c.execute("SELECT last_insert_rowid()")
         chunk_id = c.fetchone()[0]
@@ -315,6 +325,7 @@ class SongChunk:
 
 class RecordingIterator:
     """ Iterator """
+
     def __init__(self, record):
         self._recording = record
         self._idx = 0
@@ -350,9 +361,9 @@ class Recording:
             total_length = float(samples.shape[0] / sample_rate)
             for i in range(math.floor(total_length / chunk_len)):
                 # Downsamples to cfg_default.recording_rate
-                self.song_chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i+1) * sample_rate * chunk_len:
-                                                     int(sample_rate/cfg_default.recording_rate)],
-                                             cfg_default.recording_rate, i, song_wav))
+                self.song_chunks.append(SongChunk(samples[i * sample_rate * chunk_len:(i + 1) * sample_rate * chunk_len:
+                                                          int(sample_rate / cfg_default.recording_rate)],
+                                                  cfg_default.recording_rate, i, song_wav))
             self.load = True
 
     def __bool__(self):
@@ -521,7 +532,6 @@ if __name__ == "__main__":
             # Do all of the preprocessing and feature extraction
             recording.standard_process(write_spectrograms=False)  # NOT WRITING SPECTROGRAMS TO SAVE TIME!
             # Save the information to the database
-            # TIME < .5 seconds
             recording.insert_to_database(c)
             conn.commit()
             print("Added new record to database")
