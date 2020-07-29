@@ -96,20 +96,20 @@ class SongChunk:
         self.spec_in_memory = False
 
     @classmethod
-    def from_database_id(cls, record_id, db_connection):
+    def from_database_id(cls, record_id, db_cursor):
         """
         Create a SongChunk instance from data already stored in the database. Does NOT load spectrogram into memory,
         only the archipelagos and data about where the spectrogram image is stored are loaded into the instance
         :param record_id: The RecordID of the SongChunk in the database that should be turned into an instance
-        :param db_connection: A connection to the SQLite3 database
+        :param db_cursor: A connection to the SQLite3 database
         :return: A SongChunk instance which has its specname, archipelagos, and spec_in_memory fields populated
-        using the data in the database pointed to by db_connection
+        using the data in the database pointed to by db_cursor
         """
         chunk = SongChunk()
 
         # Get the specpath
-        db_connection.execute("SELECT SpecPath FROM chunks where RecordID={}".format(record_id))
-        path = db_connection.fetchone()
+        db_cursor.execute("SELECT SpecPath FROM chunks where RecordID={}".format(record_id))
+        path = db_cursor.fetchone()
         # Couldn't find chunk with RecordID record_id in the database
         if path is None:
             raise sqlite3.ProgrammingError("The RecordID ({}) of the chunk you tried to load wasn't"
@@ -117,25 +117,25 @@ class SongChunk:
         chunk.specname = path[0]
 
         # Fetch if the spectrogram has actually been stored at the Specpath
-        db_connection.execute("SELECT SpecWritten FROM chunks where RecordID={}".format(record_id))
-        chunk.spec_in_memory = bool(db_connection.fetchone()[0])
+        db_cursor.execute("SELECT SpecWritten FROM chunks where RecordID={}".format(record_id))
+        chunk.spec_in_memory = bool(db_cursor.fetchone()[0])
 
         # Check if there are archipelagos for the chunk
-        db_connection.execute("SELECT NumACP FROM chunks where RecordID={}".format(record_id))
-        num_acp = db_connection.fetchone()[0]
+        db_cursor.execute("SELECT NumACP FROM chunks where RecordID={}".format(record_id))
+        num_acp = db_cursor.fetchone()[0]
         if num_acp:
             # Fetch the archipelagos if there are supposed to be archipelagos
-            db_connection.execute("SELECT ArchID FROM archs where ParentChunk={}".format(record_id))
-            archs = db_connection.fetchall()
+            db_cursor.execute("SELECT ArchID FROM archs where ParentChunk={}".format(record_id))
+            archs = db_cursor.fetchall()
             if len(archs) != num_acp:
                 raise sqlite3.ProgrammingError("Did not find the expected number of archipelagos in the database. "
                                                "Expected: {}, Found: {}".format(num_acp, len(archs)))
             for arch in archs:
-                chunk.archipelagos.append(DenseArchipelago.from_database_id(arch[0], db_connection))
+                chunk.archipelagos.append(DenseArchipelago.from_database_id(arch[0], db_cursor))
         chunk._archipelagos_initialized = True
 
-        db_connection.execute("SELECT Height, Width FROM chunks where RecordID={}".format(record_id))
-        chunk.height, chunk.width = db_connection.fetchone()
+        db_cursor.execute("SELECT Height, Width FROM chunks where RecordID={}".format(record_id))
+        chunk.height, chunk.width = db_cursor.fetchone()
 
         return chunk
 
@@ -207,6 +207,12 @@ class SongChunk:
         if show:
             plt.imshow(img)
             plt.show()
+
+            plt.pcolormesh(self.times, self.frequencies, self.spectrogram)
+            plt.ylabel('Frequency [Hz]')
+            plt.xlabel('Time [sec]')
+            plt.title("Example Whale Song")
+            plt.show()
         return img
 
     def threshold(self, cutoff_fraction=cfg_default.threshold_cutoff):
@@ -232,13 +238,13 @@ class SongChunk:
     def rowwise_statistical_threshold(self):
         self.spectrogram = denoise(self.spectrogram, display=False)
 
-    def save_chunk(self, c):
+    def save_chunk(self, db_cursor):
         """
         Save the spectrogram which corresponds to the SongChunk, if it isn't already saved in the database
         """
         # First check whether the spectrogram already exists in the location through the database
-        c.execute("SELECT SpecWritten FROM chunks where SpecPath='{}'".format(self.specname))
-        db_entry = c.fetchone()
+        db_cursor.execute("SELECT SpecWritten FROM chunks where SpecPath='{}'".format(self.specname))
+        db_entry = db_cursor.fetchone()
         # db_entry == 0 implies chunk is in database but spectrogram not yet written to memory
         # db_entry is None implies the chunk is not yet in the database
         if db_entry is None or db_entry[0] == 0:
@@ -251,7 +257,7 @@ class SongChunk:
             # Update the database entry to show that the spectrogram has been written to memory
             # if the chunk is already in the database
             if db_entry is not None:
-                c.execute("UPDATE chunks SET SpecWritten=1 where SpecPath='{}'".format(self.specname))
+                db_cursor.execute("UPDATE chunks SET SpecWritten=1 where SpecPath='{}'".format(self.specname))
 
     def num_archipelagos(self):
         """
@@ -295,17 +301,17 @@ class SongChunk:
                 return total_density / self.num_archipelagos()
         return None
 
-    def insert_to_database(self, c, fid):
+    def insert_to_database(self, db_cursor, fid):
         """
         Insert the SongChunk into the database. This insertion involves a) inserting metadata like num_archipelagos
         and b) inserting all of the archipelagos in the SongChunk into the database as well. See the EXPLANATORY_FILE
         for more details on the database
-        :param c: Cursor for SQLite3 database
+        :param db_cursor: Cursor for SQLite3 database
         :param fid: The FileID field in the database of the Recording which is the parent of this SongChunk
         :return:
         """
         # Insert the SongChunk into the chunks table
-        c.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP,"
+        db_cursor.execute("INSERT INTO chunks (SpecPath, ParentRecording, NumACP,"
                   " AvgACPSize, AvgACPDensity, SpecWritten, Width, Height) "
                   "VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(self.specname,
                                                                                    fid,
@@ -316,11 +322,11 @@ class SongChunk:
                                                                                    self.spectrogram.shape[1],
                                                                                    self.spectrogram.shape[0]))
         # Get the RowID of the SongChunk we just inserted
-        c.execute("SELECT last_insert_rowid()")
-        chunk_id = c.fetchone()[0]
+        db_cursor.execute("SELECT last_insert_rowid()")
+        chunk_id = db_cursor.fetchone()[0]
         # Insert all of the archipelagos in the SongChunk into the Archs table
         for archipelago in self.archipelagos:
-            archipelago.insert_to_database(c, chunk_id)
+            archipelago.insert_to_database(db_cursor, chunk_id)
 
 
 class RecordingIterator:
@@ -339,16 +345,15 @@ class RecordingIterator:
 
 
 class Recording:
-    def __init__(self, song_wav, chunk_len=cfg_default.chunk_len):
+    def __init__(self, song_wav, chunk_len=cfg_default.chunk_len, db_cursor=None):
         """
         Initializes Recording object by reading in the .wav file 'song_wav' and breaking it into
         several SongChunks with recording length of 'chunk_len'
         :param song_wav: wav file containing the whale song
         :param chunk_len: The length, in seconds, that each 'chunk' of the recording should be
         """
-        # Check if it already exists in the database, and if so abort creation of new object
-        c.execute("SELECT * FROM recordings where Path='{}'".format(song_wav))
-        if c.fetchone() is not None:
+        if db_cursor is not None and db_cursor.\
+                execute("SELECT * FROM recordings where Path='{}'".format(song_wav)).fetchone() is not None:
             self.load = False
         else:
             self.song_wav = song_wav
@@ -431,29 +436,29 @@ class Recording:
         if write_spectrograms:
             self.save_spectrograms()
 
-    def insert_to_database(self, c):
+    def insert_to_database(self, db_cursor):
         """
         Insert the Recording and all of its SongChunks into the database if there is not already a recording
         in the database which was generated from the same song_wav
-        :param c: The database cursor
+        :param db_cursor: The database cursor
         :return: False if an Recording which has the same song_wav is already in the database, True if there wasn't
         already a Recording with the song_wav in the database and so this Recording was added to the database
         """
         # Check if a recording with the same file path already exists in the database
-        c.execute("SELECT * FROM recordings WHERE Path='{}'".format(self.song_wav))
-        if c.fetchone() is not None:
+        db_cursor.execute("SELECT * FROM recordings WHERE Path='{}'".format(self.song_wav))
+        if db_cursor.fetchone() is not None:
             print("{} already in database".format(self.song_wav))
             return False
 
         # Insert the overall recordings object into recordings table first
-        c.execute("INSERT INTO recordings (Path) VALUES ('{}')".format(self.song_wav))
+        db_cursor.execute("INSERT INTO recordings (Path) VALUES ('{}')".format(self.song_wav))
 
         # Get the FileID of the recording in the recordings table
-        c.execute("SELECT last_insert_rowid()")
-        fid = c.fetchone()[0]
+        db_cursor.execute("SELECT last_insert_rowid()")
+        fid = db_cursor.fetchone()[0]
         # Insert each of the song chunks into the chunks table
         for chunk in self.song_chunks:
-            chunk.insert_to_database(c, fid)
+            chunk.insert_to_database(db_cursor, fid)
 
         return True
 
@@ -461,44 +466,44 @@ class Recording:
         return RecordingIterator(self)
 
 
-def db_check(c):
+def db_check(db_cursor):
     """
     Verifies that all of the expected tables are in the database that cursor 'c' points to
-    :param c: A SQLite3 cursor object pointing to a database
+    :param db_cursor: A SQLite3 cursor object pointing to a database
     :return: True if all of the tables already existed in the database, false otherwise
     """
     db_exists = True
     # Check that the FileTable exists
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='recordings'")
-    if c.fetchone() is None:
+    db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='recordings'")
+    if db_cursor.fetchone() is None:
         # Create FileTable table, it didn't exist before
-        c.execute("CREATE TABLE recordings (FileID INTEGER PRIMARY KEY, Path TEXT NOT NULL)")
+        db_cursor.execute("CREATE TABLE recordings (FileID INTEGER PRIMARY KEY, Path TEXT NOT NULL)")
         db_exists = False
 
     # Check that RecordingTable exists
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
-    if c.fetchone() is None:
+    db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
+    if db_cursor.fetchone() is None:
         # Create RecordingTable
-        c.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
+        db_cursor.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
                   "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Label INTEGER,"
                   " AvgACPDensity REAL, SpecWritten INTEGER, Width INTEGER, Height INTEGER, RFPredForOne REAL, "
                   "FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
         db_exists = False
 
     # Check that ArchipelagoTable exists
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archs'")
-    if c.fetchone() is None:
+    db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archs'")
+    if db_cursor.fetchone() is None:
         # Create ArchipelagoTable
-        c.execute("CREATE TABLE archs (ArchID INTEGER PRIMARY KEY, "
+        db_cursor.execute("CREATE TABLE archs (ArchID INTEGER PRIMARY KEY, "
                   "ParentChunk INTEGER, LeftBd INTEGER, RightBd INTEGER, UpBd INTEGER,"
                   "LowBd INTEGER, FOREIGN KEY(ParentChunk) REFERENCES chunks(RecordID))")
         db_exists = False
 
     # Check that LandTable exists
-    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='land'")
-    if c.fetchone() is None:
+    db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='land'")
+    if db_cursor.fetchone() is None:
         # Create ArchipelagoTable
-        c.execute("CREATE TABLE land (ParentArchipelago INTEGER, X INTEGER, Y INTEGER,"
+        db_cursor.execute("CREATE TABLE land (ParentArchipelago INTEGER, X INTEGER, Y INTEGER,"
                   " FOREIGN KEY(ParentArchipelago) REFERENCES archs(ArchID))")
         db_exists = False
 
@@ -519,24 +524,30 @@ if __name__ == "__main__":
         print("{} did not contain all of the expected database tables when examined".format(args.db))
     conn.commit()
 
-    wavs = listdir(args.wav_directory)
+    wavs = []
+    files = listdir(args.wav_directory)
+    for file in files:
+        if file.endswith(".wav"):
+            wavs.append(file)
     recordings = []
     num_chunks = 0
 
     for wav_file in wavs:
         start = time.time()
         # Load in the song
-        recording = Recording(pjoin(args.wav_directory, wav_file))
+        recording = Recording(pjoin(args.wav_directory, wav_file), db_cursor=c)
         # If the recording hasn't already been parsed into the database
         if recording:
             # Do all of the preprocessing and feature extraction
+            for chunk in recording:
+                plt.pcolormesh(chunk.times, chunk.frequencies, chunk.spectrogram)
+                plt.show()
             recording.standard_process(write_spectrograms=False)  # NOT WRITING SPECTROGRAMS TO SAVE TIME!
             # Save the information to the database
             recording.insert_to_database(c)
             conn.commit()
             print("Added new record to database")
             print("It took %.3f seconds to process" % (time.time() - start))
-
             recordings.append(recording)
             num_chunks += len(recording.song_chunks)
 
