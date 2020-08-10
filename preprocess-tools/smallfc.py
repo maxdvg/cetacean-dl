@@ -13,9 +13,9 @@ class SmallFC(nn.Module):
 
         # Pretty generic fully connected neural network of the form
         # input_dim X input_dim * .2 X input_dim * .15 X num_output_classes * 8 X num_output_classes
-        self.fc1 = nn.Linear(input_dim, math.floor(input_dim * .2))
-        self.fc2 = nn.Linear(math.floor(input_dim * .2), math.floor(input_dim * .15))
-        self.fc3 = nn.Linear(math.floor((input_dim * .15)), math.ceil(num_output_classes * 8))
+        self.fc1 = nn.Linear(input_dim, math.floor(input_dim * .1))
+        self.fc2 = nn.Linear(math.floor(input_dim * .1), math.floor(input_dim * .05))
+        self.fc3 = nn.Linear(math.floor((input_dim * .05)), math.ceil(num_output_classes * 8))
         self.fc4 = nn.Linear(math.ceil(num_output_classes * 8), num_output_classes)
 
     def forward(self, x):

@@ -34,9 +34,9 @@ if __name__ == "__main__":
     #      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     # TODO: Don't hardcode cutoffs
-    trainset = WhaleSongDataset(bh_cur, hb_cur, .405, .80)
+    trainset = WhaleSongDataset(bh_cur, hb_cur, .65, .80)
     # TODO: Change batch size back to 4
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=2,
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
                                               shuffle=True, num_workers=0)
 
     # testset = WhaleSongDataset(bh_cur, hb_cur, .405, .80)
@@ -71,10 +71,12 @@ if __name__ == "__main__":
 
             # print statistics
             running_loss += loss.item()
-            if i % 3 == 2:  # print every 3 mini-batches
+            if i % 25 == 24:  # print every 25 mini-batches
                 print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / 3))
+                      (epoch + 1, i + 1, running_loss / 25))
                 running_loss = 0.0
+
+            torch.save(model.state_dict(), "model.pt")
 
     print('Finished Training')
 

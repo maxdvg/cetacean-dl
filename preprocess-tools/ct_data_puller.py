@@ -105,8 +105,8 @@ class SongChunk:
         using the data in the database pointed to by db_cursor
         """
         chunk = SongChunk()
-
         # Get the specpath
+
         db_cursor.execute("SELECT SpecPath FROM chunks where RecordID={}".format(record_id))
         path = db_cursor.fetchone()
         # Couldn't find chunk with RecordID record_id in the database
@@ -205,12 +205,6 @@ class SongChunk:
                 img[self.height - 1 - land[1]][land[0]] = 1
         if show:
             plt.imshow(img)
-            plt.show()
-
-            plt.pcolormesh(self.times, self.frequencies, self.spectrogram)
-            plt.ylabel('Frequency [Hz]')
-            plt.xlabel('Time [sec]')
-            plt.title("Example Whale Song")
             plt.show()
         return img
 
@@ -505,6 +499,9 @@ def db_check(db_cursor):
         db_cursor.execute("CREATE TABLE land (ParentArchipelago INTEGER, X INTEGER, Y INTEGER,"
                   " FOREIGN KEY(ParentArchipelago) REFERENCES archs(ArchID))")
         db_exists = False
+
+    # Index on ParentArchipelago in land (exponential speedup on reconstructing archipelagos)
+    db_cursor.execute("create index parent_idx on land (ParentArchipelago)")
 
     return db_exists
 

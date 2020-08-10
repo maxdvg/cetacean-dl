@@ -7,6 +7,7 @@
 import argparse
 from ct_data_puller import SongChunk, cfg_default
 import numpy as np
+import random
 from sklearn.ensemble import RandomForestClassifier
 import subprocess
 import sqlite3
@@ -64,9 +65,9 @@ def manual_database_classify(db_connection, record_id):
     if preexisting_classification is not None:
         return False
 
-    # # The chunk hasn't yet been classified in the database. Load object and display archipelagos
-    # chunk = SongChunk.from_database_id(record_id, db_connection)
-    # chunk.reconstruct_archipelagos_image()
+    # The chunk hasn't yet been classified in the database. Load object and display archipelagos
+    chunk = SongChunk.from_database_id(record_id, db_connection)
+    chunk.reconstruct_archipelagos_image()
 
     # Let user know where the clip starts in the full spectrogram
     db_connection.execute("SELECT SpecPath from chunks where RecordID={}".format(record_id))
@@ -220,10 +221,14 @@ if __name__ == "__main__":
     conn = sqlite3.connect(sys_args.db)
     c = conn.cursor()
 
-    # Get some manual classifications before generating a predictor
-    for i in range(1, 300):
-        manual_database_classify(c, i)
-        conn.commit()
+    c.execute("select count(*) from chunks")
+    num_chunks = c.fetchone()[0]
+
+    # # Get some manual classifications before generating a predictor
+    # for i in range(1, 2):
+    #     rand_chunk = random.randint(1, num_chunks)
+    #     manual_database_classify(c, rand_chunk)
+    #     conn.commit()
 
     # Generate predictions
     feature_columns = ["NumACP", "AvgACPSize", "AvgACPDensity"]
