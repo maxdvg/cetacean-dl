@@ -9,11 +9,13 @@
 # argv[2] is path to humpback database
 
 import math
+import numpy as np
 import sqlite3
 import sys
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data.sampler import SubsetRandomSampler
 from torch import nn
 import torchvision
 import torchvision.transforms as transforms
@@ -29,34 +31,42 @@ if __name__ == "__main__":
     hb_conn = sqlite3.connect(sys.argv[2])
     hb_cur = hb_conn.cursor()
 
-    # transform = transforms.Compose(
-    #     [transforms.ToTensor(),
-    #      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     # TODO: Don't hardcode cutoffs
-    trainset = WhaleSongDataset(bh_cur, hb_cur, .65, .80)
-    # TODO: Change batch size back to 4
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
-                                              shuffle=True, num_workers=0)
+    dataset = WhaleSongDataset(bh_cur, hb_cur, .65, .80)
 
-    # testset = WhaleSongDataset(bh_cur, hb_cur, .405, .80)
-    # testloader = torch.utils.data.DataLoader(testset, batch_size=4,
-    #                                          shuffle=False, num_workers=2)
+    # Divide the data into mutually exclusive training and validation sets
+    validation_size = 0.2
+    num_data = len(dataset)
+    idxs = list(range(num_data))
+    np.random.shuffle(idxs)
+    split = int(math.floor(validation_size * num_data))
+    train_indices, val_indices = idxs[split:], idxs[:split]
+
+    train_sampler = SubsetRandomSampler(train_indices)
+    valid_sampler = SubsetRandomSampler(val_indices)
+
+    batch_size = 4
+
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
+                                               sampler=train_sampler, num_workers=0)
+    validation_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
+                                                    sampler=valid_sampler, num_workers=0)
 
     classes = ('humpback', 'bowhead')
-
 
     # Instantiate the model
     # TODO: Don't hardcode input/output dimensions
     model = SmallFC(18382, 2)
 
-    criterion = nn.CrossEntropyLoss()
+    # TODO: Verify weight tensor is doing what you want it to do (stop network from biasing towards most common class)
+    criterion = nn.CrossEntropyLoss(weight=torch.tensor([1/dataset.num_hb, 1/dataset.num_bh]))
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     for epoch in range(2):  # loop over the dataset multiple times
 
         running_loss = 0.0
-        for i, data in enumerate(trainloader, 0):
+        for i, data in enumerate(train_loader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data['image'].float(), data['classification']
 
