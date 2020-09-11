@@ -4,7 +4,6 @@
 # Loads whale song data into database. Intended workflow is to run this program on a directory
 # containing many .wav files which contain recordings of a certain type of whale. This program will
 # produce a database with several useful features extracted about the .wav files in that directory.
-# More information about the database structure can be found in EXPLANATORY_FILE
 
 # sys.argv[1] is a directory which contains (exclusively) .wav files of whale songs
 # sys.argv[2] is a .db SQLite file which contains the database of information

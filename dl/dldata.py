@@ -15,8 +15,7 @@ class WhaleSongDataset(Dataset):
     def __init__(self, bh_db_cursor: sqlite3.Cursor, hb_db_cursor: sqlite3.Cursor,
                  bh_cutoff: float, hb_cutoff: float, transform=None):
         """
-        :param bh_db_cursor: Cursor to sqlite3 database containing bowhead song data (see EXPLANATORY_FILE for
-         information on database structure)
+        :param bh_db_cursor: Cursor to sqlite3 database containing bowhead song data
         :param hb_db_cursor: Cursor to sqlite3 database containing humback song data
         :param bh_cutoff: Bowhead cutoff
         :param hb_cutoff: Humpback cutoff

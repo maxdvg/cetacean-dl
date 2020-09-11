@@ -2,7 +2,6 @@
 # 7/9/20
 
 # Tools for interacting with database created by ct-data-puller.py
-# See EXPLANATORY_FILE for information on the database
 
 import argparse
 from ct_data_puller import SongChunk, cfg_default
