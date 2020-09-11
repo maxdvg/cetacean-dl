@@ -12,6 +12,7 @@ import math
 import numpy as np
 import sqlite3
 import sys
+import time
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -22,6 +23,11 @@ import torchvision.transforms as transforms
 
 from smallfc import SmallFC
 from dldata import WhaleSongDataset
+
+
+def print_time(message):
+    print("{} {}".format(message, time.time()))
+
 
 if __name__ == "__main__":
     # bowhead database connection
@@ -46,7 +52,7 @@ if __name__ == "__main__":
     train_sampler = SubsetRandomSampler(train_indices)
     valid_sampler = SubsetRandomSampler(val_indices)
 
-    batch_size = 4
+    batch_size = 8
 
     train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
                                                sampler=train_sampler, num_workers=0)
@@ -57,7 +63,7 @@ if __name__ == "__main__":
 
     # Instantiate the model
     # TODO: Don't hardcode input/output dimensions
-    model = SmallFC(18382, 2)
+    #model = SmallFC(18382, 2)
 
     # TODO: Verify weight tensor is doing what you want it to do (stop network from biasing towards most common class)
     criterion = nn.CrossEntropyLoss(weight=torch.tensor([1/dataset.num_hb, 1/dataset.num_bh]))
@@ -85,6 +91,16 @@ if __name__ == "__main__":
                 print('[%d, %5d] loss: %.3f' %
                       (epoch + 1, i + 1, running_loss / 25))
                 running_loss = 0.0
+
+            # # Evaluate model on validation set
+            # if i % 100 == 99:
+            #     for j, validation_data in enumerate(validation_loader, 0):
+            #         # get the inputs; data is a list of [inputs, labels]
+            #         inputs, labels = data['image'].float(), data['classification']
+            #
+            #         # forward + backward + optimize
+            #         outputs = model(inputs)
+            #         print("what's up loser?")
 
             torch.save(model.state_dict(), "model.pt")
 

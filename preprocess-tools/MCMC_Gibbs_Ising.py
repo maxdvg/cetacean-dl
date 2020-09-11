@@ -54,46 +54,48 @@ if __name__ == "__main__":
         # Threshold the spectrogram at the mean
         thresholded_spectrogram = threshold(spectrogram, spectrogram.mean(), "Thresholded")
 
-        # Create an array with a boundary of zeros for the Gibbs sampling
-        ising = np.zeros((thresholded_spectrogram.shape[0] + 2, thresholded_spectrogram.shape[1] + 2), dtype=np.int8)
+        # # Create an array with a boundary of zeros for the Gibbs sampling
+        # ising = np.zeros((thresholded_spectrogram.shape[0] + 2, thresholded_spectrogram.shape[1] + 2), dtype=np.int8)
+        #
+        # # Populate Ising with values from thresholded spectrogram
+        # for row_idx, row in enumerate(thresholded_spectrogram):
+        #     for pixel_idx, pixel in enumerate(row):
+        #         if pixel == 0:
+        #             ising[row_idx + 1][pixel_idx + 1] = -1
+        #         else:
+        #             ising[row_idx + 1][pixel_idx + 1] = 1
+        #
+        # # higher means that adjacent pixels will mores strongly want to be the same
+        # couple_strength = 4
+        #
+        # # Gibbs sampling (3 iterations)
+        # for gibbs_sample_pass in range(3):
+        #     for ising_col in range(1, len(ising[0]) - 1):
+        #         for ising_row in range(1, len(ising) - 1):
+        #             potentials = []
+        #             for alignment in [-1, 1]:
+        #                 edge_pot = np.exp(couple_strength * ising[ising_row - 1, ising_col] * alignment)\
+        #                            * np.exp(couple_strength * ising[ising_row, ising_col - 1] * alignment)\
+        #                            * np.exp(couple_strength * ising[ising_row + 1, ising_col] * alignment)\
+        #                            * np.exp(couple_strength * ising[ising_row, ising_col + 1] * alignment)
+        #                 potentials.append(edge_pot)
+        #             prob1 = multivariate_normal.pdf(thresholded_spectrogram[ising_row - 1, ising_col - 1], mean=1, cov=1) \
+        #                     * potentials[1] / \
+        #                     (multivariate_normal.pdf(thresholded_spectrogram[ising_row - 1, ising_col - 1], mean=1, cov=1)
+        #                      * potentials[1]
+        #                      + multivariate_normal.pdf(thresholded_spectrogram[ising_row - 1, ising_col - 1], mean=-1, cov=1)
+        #                      * potentials[0])
+        #             if np.random.uniform() <= prob1:
+        #                 ising[ising_row, ising_col] = 1
+        #             else:
+        #                 ising[ising_row, ising_col] = -1
+        #
+        # # Convert back to binary image (0 and 2, not -1 and 1 like Ising)
+        # mcmc_denoised = ising[1:len(ising) - 1, 1:len(ising[0]) - 1] + 1
+        #
+        # colormesh_spectrogram(mcmc_denoised, times, freqs, "MCMC {}".format(wav), save=True)
 
-        # Populate Ising with values from thresholded spectrogram
-        for row_idx, row in enumerate(thresholded_spectrogram):
-            for pixel_idx, pixel in enumerate(row):
-                if pixel == 0:
-                    ising[row_idx + 1][pixel_idx + 1] = -1
-                else:
-                    ising[row_idx + 1][pixel_idx + 1] = 1
-
-        # higher means that adjacent pixels will mores strongly want to be the same
-        couple_strength = 4
-
-        # Gibbs sampling (3 iterations)
-        for gibbs_sample_pass in range(3):
-            for ising_col in range(1, len(ising[0]) - 1):
-                for ising_row in range(1, len(ising) - 1):
-                    potentials = []
-                    for alignment in [-1, 1]:
-                        edge_pot = np.exp(couple_strength * ising[ising_row - 1, ising_col] * alignment)\
-                                   * np.exp(couple_strength * ising[ising_row, ising_col - 1] * alignment)\
-                                   * np.exp(couple_strength * ising[ising_row + 1, ising_col] * alignment)\
-                                   * np.exp(couple_strength * ising[ising_row, ising_col + 1] * alignment)
-                        potentials.append(edge_pot)
-                    prob1 = multivariate_normal.pdf(thresholded_spectrogram[ising_row - 1, ising_col - 1], mean=1, cov=1) \
-                            * potentials[1] / \
-                            (multivariate_normal.pdf(thresholded_spectrogram[ising_row - 1, ising_col - 1], mean=1, cov=1)
-                             * potentials[1]
-                             + multivariate_normal.pdf(thresholded_spectrogram[ising_row - 1, ising_col - 1], mean=-1, cov=1)
-                             * potentials[0])
-                    if np.random.uniform() <= prob1:
-                        ising[ising_row, ising_col] = 1
-                    else:
-                        ising[ising_row, ising_col] = -1
-
-        # Convert back to binary image (0 and 2, not -1 and 1 like Ising)
-        mcmc_denoised = ising[1:len(ising) - 1, 1:len(ising[0]) - 1] + 1
-
-        colormesh_spectrogram(mcmc_denoised, times, freqs, "MCMC {}".format(wav), save=True)
+        mcmc_denoised = thresholded_spectrogram
 
         # Find archipelagos in denoised spectrogram
         archipelagos = []
@@ -103,9 +105,9 @@ if __name__ == "__main__":
                     arch = DenseArchipelago((point_idx, row_idx))
                     mcmc_denoised[row_idx][point_idx] = 0
                     # Allow for a gap between islands in archipelago of size at most 3
-                    archipelago_expander(arch, (point_idx, row_idx), mcmc_denoised, 3)
+                    archipelago_expander(arch, (point_idx, row_idx), mcmc_denoised, 5)
                     # Only pick islands with more than 12 pixel
-                    if arch.size() > 20:
+                    if arch.size() > 13:
                         archipelagos.append(arch)
 
         # Regenerate and display cleaned up spectrogram from denoised spectrogram

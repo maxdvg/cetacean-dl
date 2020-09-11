@@ -500,8 +500,10 @@ def db_check(db_cursor):
                   " FOREIGN KEY(ParentArchipelago) REFERENCES archs(ArchID))")
         db_exists = False
 
-    # Index on ParentArchipelago in land (exponential speedup on reconstructing archipelagos)
+    # Indexes (double exponential speedup on reconstructing archipelagos)
     db_cursor.execute("create index parent_idx on land (ParentArchipelago)")
+    db_cursor.execute("create index parent_rec_idx on chunks (ParentRecording)")
+    db_cursor.execute("create index parent_chunk_idx on archs (ParentChunk)")
 
     return db_exists
 
