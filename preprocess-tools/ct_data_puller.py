@@ -1,15 +1,19 @@
 # Max Van Gelder
 # 6/29/20
 
-# Loads whale song data into database
+# Loads whale song data into database. Intended workflow is to run this program on a directory
+# containing many .wav files which contain recordings of a certain type of whale. This program will
+# produce a database with several useful features extracted about the .wav files in that directory.
+# More information about the database structure can be found in EXPLANATORY_FILE
 
 # sys.argv[1] is a directory which contains (exclusively) .wav files of whale songs
 # sys.argv[2] is a .db SQLite file which contains the database of information
 # sys.argv[3] is the path where the spectrograms which are generated should be saved
 
 # WARNING: THE REMAINDER OF EACH RECORDING (RECORDING-LENGTH % CHUNK-LENGTH) IS SIMPLY THROWN AWAY.
-# AS WRITTEN, THIS PROGRAM IS FOR PULLING GOOD WHALE DATA, NOT AUTOMATICALLY DETECTING WHALES. ANY
-# WHALE CALLS WHICH APPEAR IN THE REMAINDER OF THE RECORDING AREN'T DETECTED AS THE PROGRAM STANDS
+# AS WRITTEN, THIS PROGRAM IS FOR PULLING "GOOD" WHALE DATA, NOT AUTOMATICALLY DETECTING WHALES. ANY
+# WHALE CALLS WHICH APPEAR IN THE REMAINDER (RECORDING-LENGTH % CHUNK-LENGTH) OF THE RECORDING
+# AREN'T DETECTED AS THE PROGRAM STANDS
 
 import argparse
 import copy
@@ -22,8 +26,6 @@ from os.path import join as pjoin
 from os.path import basename, dirname
 from scipy import signal
 from scipy.io import wavfile
-from select_and_search import DenseArchipelago, archipelago_expander, \
-    regenerate_from_archipelagos, colormesh_spectrogram, denoise
 import sqlite3
 import time
 
@@ -57,17 +59,148 @@ class AlreadyInitializedError(Exception):
         return "{}: Attempted to reset value {} to {}".format(self.message, self.value, self.attempted_value)
 
 
-def bool_to_sqlite(val):
+class DenseArchipelago:
     """
-    :param val: A boolean
-    :return: 1 if val is True, 0 if val is False
+    A DenseArchipelago is meant to characterize an important event of sound within a spectrogram. Importance is
+    determined by the level of connectivity of the sound incident and the size of
+    the sound incident within the spectrogram.
     """
-    if val:
-        return 1
-    return 0
+    def __init__(self, *seed):
+        if seed:
+            # Bounding box for the dense archipelago is initialized to only
+            # include the archipelago's seed if seed was specified on init
+            self.lower_bd = self.upper_bd = seed[0][1]
+            self.left_bd = self.right_bd = seed[0][0]
+        else:
+            # If seed wasn't specified on init, initialize bounding box to none
+            self.lower_bd = self.upper_bd = None
+            self.left_bd = self.right_bd = None
+        # List containing all of the points within the archipelago
+        self.land = []
+
+    @classmethod
+    def from_database_id(cls, arch_id, db_connection):
+        """
+        Load in a DenseArchipelago from the database
+        :param arch_id: The ArchID in the database which corresponds to the DenseArchipelago we will be loading
+        :param db_connection: The connection to the SQLite3 database
+        :return: A DenseArchipelago instance which corresponds exactly to the archipelago with ArchID=arch_id in the
+        database pointed to by db_connection
+        """
+        load_arch = DenseArchipelago()
+        # Get the bounding box
+        db_connection.execute("SELECT LeftBd FROM archs WHERE ArchID={}".format(arch_id))
+        left_bd = db_connection.fetchone()
+        if left_bd is None:
+            raise sqlite3.ProgrammingError("The archipelago with ArchId={} isn't in the database".format(arch_id))
+        load_arch.left_bd = left_bd[0]
+        db_connection.execute("SELECT RightBd FROM archs WHERE ArchID={}".format(arch_id))
+        load_arch.right_bd = db_connection.fetchone()[0]
+        db_connection.execute("SELECT UpBd FROM archs WHERE ArchID={}".format(arch_id))
+        load_arch.upper_bd = db_connection.fetchone()[0]
+        db_connection.execute("SELECT LowBd FROM archs WHERE ArchID={}".format(arch_id))
+        load_arch.lower_bd = db_connection.fetchone()[0]
+
+        # Load all of the land into the archipelago
+        db_connection.execute("SELECT X, Y FROM land WHERE ParentArchipelago={}".format(arch_id))
+        lands = db_connection.fetchall()
+        if not lands:
+            raise sqlite3.ProgrammingError("Unable to find land associated with ArchId={} in database".format(arch_id))
+        for land_piece in lands:
+            load_arch.land.append(land_piece)
+
+        return load_arch
+
+    def expand(self, focus, cp_spectrogram, cur_gap):
+        """
+        :side_effects cp_spectrogram: DESTROYS cp_spectrogram during the search process
+        :side_effects archipelago: Adds any newly discovered landmasses to the archipelago
+        :param archipelago: A DenseArchipelago object to be populated with any landmasses found
+        :param focus: The 'point of expansion', from which nearby land masses will be explored
+        :param cp_spectrogram: The spectrogram to search through for finding new land masses
+        :param cur_gap: The acceptable distance of water to traverse before giving up looking for land
+        :return: None
+        """
+        potential_neighbors = []
+        spec_height = cp_spectrogram.shape[0]
+        spec_width = cp_spectrogram.shape[1]
+
+        # Left neighbor
+        if focus[0] > 0:
+            potential_neighbors.append((focus[0] - 1, focus[1]))
+        # Upper neighbor
+        if focus[1] > 0:
+            potential_neighbors.append((focus[0], focus[1] - 1))
+        # Right neighbor
+        if focus[0] < spec_width - 1:
+            potential_neighbors.append((focus[0] + 1, focus[1]))
+        # Lower neighbor
+        if focus[1] < spec_height - 1:
+            potential_neighbors.append((focus[0], focus[1] + 1))
+
+        while potential_neighbors:
+            potential_neighbor = potential_neighbors.pop()
+            if cp_spectrogram[potential_neighbor[1]][potential_neighbor[0]]:
+                # Add the land mass to the archipelago if it exists
+                self.add_point(potential_neighbor)
+                # Remove the land mass from the spectrogram so it can't be "found"
+                # again by this algorithm
+                cp_spectrogram[potential_neighbor[1]][potential_neighbor[0]] = 0
+                self.expand(potential_neighbor, cp_spectrogram, cur_gap)
+            elif cur_gap > 0:
+                self.expand(potential_neighbor, cp_spectrogram, cur_gap - 1)
+
+    def add_point(self, location):
+        """
+        Add a point to the archipelago, updating the bounding box of the
+        archipelago in the process
+        :param location: A tuple containing the x and y coordinates of the location
+        which is being added
+        :return: None
+        """
+        if self.lower_bd is None:
+            self.left_bd = self.right_bd = location[0]
+            self.lower_bd = self.upper_bd = location[1]
+        else:
+            self.left_bd = min(self.left_bd, location[0])
+            self.lower_bd = min(self.lower_bd, location[1])
+            self.right_bd = max(self.right_bd, location[0])
+            self.upper_bd = max(self.upper_bd, location[1])
+        self.land.append(location)
+
+    def size(self):
+        """
+        :return: Number of points contained in the archipelago
+        """
+        return len(self.land)
+
+    def density(self):
+        """
+        Calculates the proportion of the bounding box which is occupied by
+        points in the archipelago
+        :requires: Archipelago must have at least one element in it already
+        :return: a float representing the proportion of the bounding box occupied
+        by points in the archipelago
+        """
+        volume = (self.right_bd - self.left_bd + 1) * (self.upper_bd - self.lower_bd + 1)
+        return self.size() / float(volume)
+
+    def insert_to_database(self, c, song_chunk_id, ):
+        c.execute("INSERT INTO archs (ParentChunk, LeftBd, RightBd, UpBd, LowBd) VALUES"
+                  "('{}', '{}', '{}', '{}', '{}')".format(song_chunk_id, self.left_bd, self.right_bd,
+                                                    self.upper_bd, self.lower_bd))
+        c.execute("SELECT last_insert_rowid()")
+        arch_id = c.fetchone()[0]
+        for land_piece in self.land:
+            c.execute("INSERT INTO land (ParentArchipelago, X, Y) VALUES ('{}', '{}', '{}')".format(arch_id,
+                                                                                                    land_piece[0],
+                                                                                                    land_piece[1]))
 
 
 class SongChunk:
+    """
+    A SongChunk represents a portion of an audio-recording
+    """
     def __init__(self, samples=None, sample_rate=None, chunk_pos=None, parent_path=None):
         """
         :param samples: The second parameter returned by scipy.wavfile.read() on a wav file
@@ -183,7 +316,7 @@ class SongChunk:
                     arch = DenseArchipelago((point_idx, row_idx))
                     spec[row_idx][point_idx] = 0
                     # Allow for a gap between islands in archipelago of size at most 3
-                    archipelago_expander(arch, (point_idx, row_idx), spec, max_gap)
+                    arch.expand((point_idx, row_idx), spec, max_gap)
                     # Only pick islands with more than 12 pixel
                     if arch.size() > min_land_mass:
                         self.archipelagos.append(arch)
@@ -311,7 +444,7 @@ class SongChunk:
                                                                                    self.num_archipelagos(),
                                                                                    self.avg_archipelago_size(),
                                                                                    self.avg_archipelago_density(),
-                                                                                   bool_to_sqlite(self.spec_in_memory),
+                                                                                   int(self.spec_in_memory),
                                                                                    self.spectrogram.shape[1],
                                                                                    self.spectrogram.shape[0]))
         # Get the RowID of the SongChunk we just inserted
@@ -338,6 +471,9 @@ class RecordingIterator:
 
 
 class Recording:
+    """
+    A Recording represents a .wav file, and is comprised of many SongChunks
+    """
     def __init__(self, song_wav, chunk_len=cfg_default.chunk_len, db_cursor=None):
         """
         Initializes Recording object by reading in the .wav file 'song_wav' and breaking it into
@@ -476,6 +612,7 @@ def db_check(db_cursor):
     # Check that RecordingTable exists
     db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
     if db_cursor.fetchone() is None:
+        db_cursor.execute("create index parent_rec_idx on chunks (ParentRecording)")
         # Create RecordingTable
         db_cursor.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
                   "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Label INTEGER,"
@@ -486,7 +623,7 @@ def db_check(db_cursor):
     # Check that ArchipelagoTable exists
     db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archs'")
     if db_cursor.fetchone() is None:
-        # Create ArchipelagoTable
+        db_cursor.execute("create index parent_chunk_idx on archs (ParentChunk)")        # Create ArchipelagoTable
         db_cursor.execute("CREATE TABLE archs (ArchID INTEGER PRIMARY KEY, "
                   "ParentChunk INTEGER, LeftBd INTEGER, RightBd INTEGER, UpBd INTEGER,"
                   "LowBd INTEGER, FOREIGN KEY(ParentChunk) REFERENCES chunks(RecordID))")
@@ -495,17 +632,100 @@ def db_check(db_cursor):
     # Check that LandTable exists
     db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='land'")
     if db_cursor.fetchone() is None:
+        # Indexes (double exponential speedup on reconstructing archipelagos)
+        db_cursor.execute("create index parent_idx on land (ParentArchipelago)")
+
         # Create ArchipelagoTable
         db_cursor.execute("CREATE TABLE land (ParentArchipelago INTEGER, X INTEGER, Y INTEGER,"
                   " FOREIGN KEY(ParentArchipelago) REFERENCES archs(ArchID))")
         db_exists = False
 
-    # Indexes (double exponential speedup on reconstructing archipelagos)
-    db_cursor.execute("create index parent_idx on land (ParentArchipelago)")
-    db_cursor.execute("create index parent_rec_idx on chunks (ParentRecording)")
-    db_cursor.execute("create index parent_chunk_idx on archs (ParentChunk)")
-
     return db_exists
+
+
+def plot_spectrogram(wav_file, spectrogram_title, display=True):
+    """
+    Plots a of wav_file with title spectrogram_title
+    :param wav_file: The .wav file to be plotted
+    :param spectrogram_title: The title of the spectrogram to be plotted
+    :param display: If True, displays the spectrogram as a matplotlib colormesh. Otherwise, does not display image
+    :return: a 3-tuple which consists of:
+        - a 2d ndarray of float32s which represents the spectrogram
+        - an ndarray of float64s which represents the times of each spectrum
+        - an ndarray of float64s which represents the frequencies in the spectrogram
+    """
+    sample_rate, samples = wavfile.read(wav_file)
+    frequencies, times, spectrogram = signal.spectrogram(samples, sample_rate)
+
+    # Only keep frequencies between 100 and 900 Hz
+    desired_frequencies = ((frequencies >= 100) & (frequencies <= 900))
+    frequencies = frequencies[desired_frequencies]
+    spectrogram = spectrogram[desired_frequencies, :]
+
+    if display:
+        colormesh_spectrogram(spectrogram, times, frequencies, spectrogram_title)
+
+    return spectrogram, times, frequencies
+
+
+def colormesh_spectrogram(spectrogram, times, frequencies, title, save=False):
+    plt.pcolormesh(times, frequencies, spectrogram)
+    plt.ylabel('Frequency [Hz]')
+    plt.xlabel('Time [sec]')
+    plt.title(title)
+
+    if save:
+        plt.savefig("{}.png".format(title.split('.')[0]))
+
+    plt.show()
+
+
+def denoise(image, times=None, frequencies=None, display=True):
+    """
+    (Intended for use on noisy spectrograms)
+    Denoise an image by removing all pixels from each row which are less than the (mean + std deviation) of that
+    row.
+    :param image: A 2d numpy array representing an image
+    :param display: If True, then displays the image as a matplotlib plot. Otherwise, does not display image
+    :return: The denoised image.
+    """
+    denoised_img = copy.deepcopy(image)
+
+    for row in denoised_img:
+        mean = row.mean()
+        std_dev = row.std()
+
+        # Select the top 10 percent
+        dropped_indices = row < mean + std_dev
+        row[dropped_indices] = 0
+        row[np.invert(dropped_indices)] = 1
+
+    if display:
+        colormesh_spectrogram(denoised_img, times, frequencies, "Denoised")
+
+    return denoised_img
+
+
+def regenerate_from_archipelagos(archipelago_list, original_spectrogram, times, frequencies, display=True):
+    """
+    Converts a list of archipelagos back into an image of said archipelagos
+    :param archipelago_list: A list of DenseArchipelagos which were pulled out of 'original_spectrogram'
+    :param original_spectrogram: The spectrogram which was originally used to generate the archipelagos in
+    'archipelago_list'
+    :param display: If True, then displays a matplotlib colormesh of the regenerated archipelago spectrogram,
+    otherwise does not display anything
+    :return: A 2d numpy array of float32s which represents the spectrogram containing only the archipelagos from
+    'archipelago_list'
+    """
+    regenerated = np.zeros(original_spectrogram.shape, dtype=np.float32)
+    for archipelago in archipelago_list:
+        for land in archipelago.land:
+            regenerated[land[1]][land[0]] = 1
+
+    if display:
+        colormesh_spectrogram(regenerated, times, frequencies, "Archipelago Regeneration")
+
+    return regenerated
 
 
 if __name__ == "__main__":
@@ -536,11 +756,8 @@ if __name__ == "__main__":
         recording = Recording(pjoin(args.wav_directory, wav_file), db_cursor=c)
         # If the recording hasn't already been parsed into the database
         if recording:
-            # Do all of the preprocessing and feature extraction
-            for chunk in recording:
-                plt.pcolormesh(chunk.times, chunk.frequencies, chunk.spectrogram)
-                plt.show()
-            recording.standard_process(write_spectrograms=False)  # NOT WRITING SPECTROGRAMS TO SAVE TIME!
+            # Do all of the pre-processing and feature extraction
+            recording.standard_process(write_spectrograms=False)
             # Save the information to the database
             recording.insert_to_database(c)
             conn.commit()
