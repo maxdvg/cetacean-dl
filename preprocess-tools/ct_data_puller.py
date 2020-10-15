@@ -611,32 +611,35 @@ def db_check(db_cursor):
     # Check that RecordingTable exists
     db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
     if db_cursor.fetchone() is None:
-        db_cursor.execute("create index parent_rec_idx on chunks (ParentRecording)")
         # Create RecordingTable
         db_cursor.execute("CREATE TABLE chunks (RecordID INTEGER PRIMARY KEY, SpecPath TEXT NOT NULL,"
                   "ParentRecording INTEGER, NumACP INTEGER, AvgACPSize REAL, Label INTEGER,"
                   " AvgACPDensity REAL, SpecWritten INTEGER, Width INTEGER, Height INTEGER, RFPredForOne REAL, "
                   "FOREIGN KEY(ParentRecording) REFERENCES recordings(FileID))")
+        db_cursor.execute("create index parent_rec_idx on chunks (ParentRecording)")
+
         db_exists = False
 
     # Check that ArchipelagoTable exists
     db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archs'")
     if db_cursor.fetchone() is None:
-        db_cursor.execute("create index parent_chunk_idx on archs (ParentChunk)")        # Create ArchipelagoTable
         db_cursor.execute("CREATE TABLE archs (ArchID INTEGER PRIMARY KEY, "
                   "ParentChunk INTEGER, LeftBd INTEGER, RightBd INTEGER, UpBd INTEGER,"
                   "LowBd INTEGER, FOREIGN KEY(ParentChunk) REFERENCES chunks(RecordID))")
+        db_cursor.execute("create index parent_chunk_idx on archs (ParentChunk)")        # Create ArchipelagoTable
+
         db_exists = False
 
     # Check that LandTable exists
     db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='land'")
     if db_cursor.fetchone() is None:
-        # Indexes (double exponential speedup on reconstructing archipelagos)
-        db_cursor.execute("create index parent_idx on land (ParentArchipelago)")
 
         # Create ArchipelagoTable
         db_cursor.execute("CREATE TABLE land (ParentArchipelago INTEGER, X INTEGER, Y INTEGER,"
                   " FOREIGN KEY(ParentArchipelago) REFERENCES archs(ArchID))")
+        
+        # Indexes (double exponential speedup on reconstructing archipelagos)
+        db_cursor.execute("create index parent_idx on land (ParentArchipelago)")
         db_exists = False
 
     return db_exists
