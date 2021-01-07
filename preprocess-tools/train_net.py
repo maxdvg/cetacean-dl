@@ -21,7 +21,7 @@ from torch import nn
 import torchvision
 import torchvision.transforms as transforms
 
-from smallfc import SmallFC
+from networks import SmallFC, ConvNet
 from dldata import WhaleSongDataset
 
 
@@ -42,15 +42,18 @@ if __name__ == "__main__":
     dataset = WhaleSongDataset(bh_cur, hb_cur, .65, .80)
 
     # Divide the data into mutually exclusive training and validation sets
-    validation_size = 0.2
+    validation_size = 0.1
+    test_size = 0.1
     num_data = len(dataset)
     idxs = list(range(num_data))
     np.random.shuffle(idxs)
-    split = int(math.floor(validation_size * num_data))
-    train_indices, val_indices = idxs[split:], idxs[:split]
+    val_split = int(math.floor(validation_size * num_data))
+    train_split = int(math.floor(test_size * num_data)) + val_split
+    train_indices, val_indices, test_indices = idxs[val_split:], idxs[val_split:train_split], idxs[train_split:]
 
     train_sampler = SubsetRandomSampler(train_indices)
     valid_sampler = SubsetRandomSampler(val_indices)
+    test_sampler = SubsetRandomSampler(test_indices)
 
     batch_size = 8
 
@@ -58,23 +61,31 @@ if __name__ == "__main__":
                                                sampler=train_sampler, num_workers=0)
     validation_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
                                                     sampler=valid_sampler, num_workers=0)
+    test_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, sampler=test_sampler, num_workers=0)
 
     classes = ('humpback', 'bowhead')
 
     # Instantiate the model
     # TODO: Don't hardcode input/output dimensions
-    #model = SmallFC(18382, 2)
+    model = ConvNet()
+    # model = SmallFC(18382, 2)
 
     # TODO: Verify weight tensor is doing what you want it to do (stop network from biasing towards most common class)
     criterion = nn.CrossEntropyLoss(weight=torch.tensor([1/dataset.num_hb, 1/dataset.num_bh]))
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    for epoch in range(2):  # loop over the dataset multiple times
+    NUM_EPOCHS = 3
+
+    for epoch in range(NUM_EPOCHS):  # loop over the dataset multiple times
 
         running_loss = 0.0
         for i, data in enumerate(train_loader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data['image'].float(), data['classification']
+
+            # Reshape the input tensor so that it works for the convolutional net
+            # The images are 182x101 and the batch size is 8
+            inputs = torch.reshape(inputs, (8, 1, 182, 101))
 
             # zero the parameter gradients
             optimizer.zero_grad()
@@ -92,17 +103,25 @@ if __name__ == "__main__":
                       (epoch + 1, i + 1, running_loss / 25))
                 running_loss = 0.0
 
-            # # Evaluate model on validation set
-            # if i % 100 == 99:
-            #     for j, validation_data in enumerate(validation_loader, 0):
-            #         # get the inputs; data is a list of [inputs, labels]
-            #         inputs, labels = data['image'].float(), data['classification']
-            #
-            #         # forward + backward + optimize
-            #         outputs = model(inputs)
-            #         print("what's up loser?")
+        # Evaluate model on validation set
+        model.eval()
 
-            torch.save(model.state_dict(), "model.pt")
+        val_loss = 0.0
+        for j, validation_data in enumerate(validation_loader, 0):
+            # get the inputs; data is a list of [inputs, labels]
+            inputs, labels = validation_data['image'].float(), validation_data['classification']
+            inputs = torch.reshape(inputs, (8, 1, 182, 101))
+
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+
+            val_loss += loss
+
+        print("Val loss @ EP{}: ".format(epoch, val_loss / len(validation_data)))
+
+        model.train()
+
+        torch.save(model.state_dict(), "model.pt")
 
     print('Finished Training')
 
